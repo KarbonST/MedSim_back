@@ -1,0 +1,33 @@
+CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY,
+    login VARCHAR(100) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    system_role VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE players (
+    id BIGSERIAL PRIMARY KEY,
+    display_name VARCHAR(150) NOT NULL,
+    hospital_position VARCHAR(150) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE game_sessions (
+    id BIGSERIAL PRIMARY KEY,
+    code VARCHAR(50) NOT NULL UNIQUE,
+    name VARCHAR(150) NOT NULL,
+    status VARCHAR(50) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    finished_at TIMESTAMP
+);
+
+CREATE TABLE session_participants (
+    id BIGSERIAL PRIMARY KEY,
+    game_session_id BIGINT NOT NULL REFERENCES game_sessions (id) ON DELETE CASCADE,
+    player_id BIGINT NOT NULL REFERENCES players (id) ON DELETE CASCADE,
+    game_role VARCHAR(100),
+    joined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT uq_session_player UNIQUE (game_session_id, player_id)
+);
