@@ -14,6 +14,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -40,7 +41,23 @@ class PlayerSessionControllerIntegrationTest {
         jdbcTemplate.update("DELETE FROM session_participants");
         jdbcTemplate.update("DELETE FROM players");
         jdbcTemplate.update("DELETE FROM game_sessions");
-        jdbcTemplate.update("DELETE FROM users");
+        jdbcTemplate.update("DELETE FROM users WHERE login <> 'facilitator'");
+    }
+
+    @Test
+    void shouldReturnAuthenticatedFacilitatorProfile() throws Exception {
+        mockMvc.perform(get("/api/auth/me")
+                        .with(httpBasic("facilitator", "medsim123")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.login").value("facilitator"))
+                .andExpect(jsonPath("$.systemRole").value("FACILITATOR"));
+    }
+
+    @Test
+    void shouldRejectInvalidFacilitatorCredentials() throws Exception {
+        mockMvc.perform(get("/api/auth/me")
+                        .with(httpBasic("facilitator", "wrong-password")))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -97,7 +114,8 @@ class PlayerSessionControllerIntegrationTest {
         joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
         joinPlayer("Иван Сидоров", "Главный инженер", "WARD-12");
 
-        mockMvc.perform(get("/api/game-sessions/{sessionCode}/participants", "ward-12"))
+        mockMvc.perform(get("/api/game-sessions/{sessionCode}/participants", "ward-12")
+                        .with(httpBasic("facilitator", "medsim123")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionCode").value("WARD-12"))
                 .andExpect(jsonPath("$.sessionStatus").value("LOBBY"))
@@ -114,7 +132,8 @@ class PlayerSessionControllerIntegrationTest {
         joinPlayer("Иван Сидоров", "Главный инженер", "ward-12");
         joinPlayer("Павел Орлов", "Главный врач", "eng-01");
 
-        mockMvc.perform(get("/api/game-sessions"))
+        mockMvc.perform(get("/api/game-sessions")
+                        .with(httpBasic("facilitator", "medsim123")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(2))
                 .andExpect(jsonPath("$[0].sessionCode").value("ENG-01"))
@@ -127,7 +146,8 @@ class PlayerSessionControllerIntegrationTest {
     void shouldStartSessionFromLobby() throws Exception {
         joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
 
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", "ward-12"))
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", "ward-12")
+                        .with(httpBasic("facilitator", "medsim123")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionCode").value("WARD-12"))
                 .andExpect(jsonPath("$.sessionStatus").value("IN_PROGRESS"))
@@ -144,10 +164,12 @@ class PlayerSessionControllerIntegrationTest {
     @Test
     void shouldFinishSessionInProgress() throws Exception {
         joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", "ward-12"))
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", "ward-12")
+                        .with(httpBasic("facilitator", "medsim123")))
                 .andExpect(status().isOk());
 
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/finish", "ward-12"))
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/finish", "ward-12")
+                        .with(httpBasic("facilitator", "medsim123")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionCode").value("WARD-12"))
                 .andExpect(jsonPath("$.sessionStatus").value("FINISHED"))
@@ -167,7 +189,8 @@ class PlayerSessionControllerIntegrationTest {
         joinPlayer("Иван Сидоров", "Главный инженер", "ward-12");
         joinPlayer("Иван Сидоров", "Главный инженер", "eng-01");
 
-        mockMvc.perform(delete("/api/game-sessions/{sessionCode}", "ward-12"))
+        mockMvc.perform(delete("/api/game-sessions/{sessionCode}", "ward-12")
+                        .with(httpBasic("facilitator", "medsim123")))
                 .andExpect(status().isNoContent());
 
         assertThat(count("game_sessions")).isEqualTo(1);
@@ -179,7 +202,8 @@ class PlayerSessionControllerIntegrationTest {
 
     @Test
     void shouldReturnNotFoundWhenSessionDoesNotExist() throws Exception {
-        mockMvc.perform(get("/api/game-sessions/{sessionCode}/participants", "missing-01"))
+        mockMvc.perform(get("/api/game-sessions/{sessionCode}/participants", "missing-01")
+                        .with(httpBasic("facilitator", "medsim123")))
                 .andExpect(status().isNotFound());
     }
 
