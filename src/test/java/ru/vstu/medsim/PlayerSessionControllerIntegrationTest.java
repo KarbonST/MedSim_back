@@ -464,6 +464,94 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(status().isConflict());
     }
 
+
+    @Test
+    void shouldClearAssignedRolesWhenTeamsAreAutoRebalanced() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+
+        joinPlayer("Анна Петрова", "Главный врач", sessionCode);
+        joinPlayer("Иван Сидоров", "Главная медсестра", sessionCode);
+        joinPlayer("Павел Орлов", "Главный инженер", sessionCode);
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode);
+        joinPlayer("Елена Миронова", "Сестра диагностического отделения", sessionCode);
+        joinPlayer("Сергей Андреев", "Заместитель главного инженера по медтехнике", sessionCode);
+
+        Long firstTeamId = teamIdBySortOrder(sessionCode, 1);
+        Long secondTeamId = teamIdBySortOrder(sessionCode, 2);
+
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Ольга Смирнова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Елена Миронова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Сергей Андреев"), secondTeamId);
+
+        mockMvc.perform(post("/api/game-sessions/{sessionCode}/roles/random", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk());
+
+        Integer assignedRolesBeforeRebalance = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM session_participants sp JOIN game_sessions gs ON gs.id = sp.game_session_id WHERE gs.code = ? AND sp.game_role IS NOT NULL",
+                Integer.class,
+                sessionCode
+        );
+
+        mockMvc.perform(post("/api/game-sessions/{sessionCode}/teams/auto-assign", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk());
+
+        Integer assignedRolesAfterRebalance = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM session_participants sp JOIN game_sessions gs ON gs.id = sp.game_session_id WHERE gs.code = ? AND sp.game_role IS NOT NULL",
+                Integer.class,
+                sessionCode
+        );
+
+        assertThat(assignedRolesBeforeRebalance).isEqualTo(6);
+        assertThat(assignedRolesAfterRebalance).isZero();
+    }
+
+    @Test
+    void shouldClearAssignedRolesWhenParticipantMovesToAnotherTeam() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+
+        joinPlayer("Анна Петрова", "Главный врач", sessionCode);
+        joinPlayer("Иван Сидоров", "Главная медсестра", sessionCode);
+        joinPlayer("Павел Орлов", "Главный инженер", sessionCode);
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode);
+        joinPlayer("Елена Миронова", "Сестра диагностического отделения", sessionCode);
+        joinPlayer("Сергей Андреев", "Заместитель главного инженера по медтехнике", sessionCode);
+
+        Long firstTeamId = teamIdBySortOrder(sessionCode, 1);
+        Long secondTeamId = teamIdBySortOrder(sessionCode, 2);
+
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Ольга Смирнова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Елена Миронова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Сергей Андреев"), secondTeamId);
+
+        mockMvc.perform(post("/api/game-sessions/{sessionCode}/roles/random", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk());
+
+        Long participantId = participantIdByName(sessionCode, "Анна Петрова");
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/participants/{participantId}/team", sessionCode, participantId)
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("teamId", secondTeamId))))
+                .andExpect(status().isOk());
+
+        Integer assignedRolesAfterMove = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM session_participants sp JOIN game_sessions gs ON gs.id = sp.game_session_id WHERE gs.code = ? AND sp.game_role IS NOT NULL",
+                Integer.class,
+                sessionCode
+        );
+
+        assertThat(assignedRolesAfterMove).isZero();
+    }
+
     @Test
     void shouldSaveSessionStageSettingsAndExposeThemInSessionView() throws Exception {
         String sessionCode = createSession("Тестовая смена", 2);

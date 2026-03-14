@@ -159,6 +159,8 @@ public class GameSessionCommandService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "В сессии нет доступных команд.");
         }
 
+        clearRolesForParticipants(participants);
+
         Map<Long, Integer> teamMemberCounts = new HashMap<>();
         teams.forEach(team -> teamMemberCounts.put(team.getId(), 0));
 
@@ -189,7 +191,13 @@ public class GameSessionCommandService {
         SessionTeam team = sessionTeamRepository.findByIdAndGameSessionId(request.teamId(), session.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Команда не найдена."));
 
+        boolean teamChanged = participant.getTeam() == null || !participant.getTeam().getId().equals(team.getId());
         participant.assignTeam(team);
+
+        if (teamChanged) {
+            clearRolesForParticipants(sessionParticipantRepository.findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId()));
+        }
+
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 
@@ -323,6 +331,10 @@ public class GameSessionCommandService {
         if (!exclusivePlayers.isEmpty()) {
             playerRepository.deleteAll(exclusivePlayers);
         }
+    }
+
+    private void clearRolesForParticipants(List<SessionParticipant> participants) {
+        participants.forEach(SessionParticipant::clearGameRole);
     }
 
     private void validateTeamRoleAssignment(SessionTeam team, List<SessionParticipant> teamParticipants) {

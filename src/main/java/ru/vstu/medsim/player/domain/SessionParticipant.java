@@ -67,6 +67,10 @@ public class SessionParticipant {
         this.gameRole = gameRole;
     }
 
+    public void clearGameRole() {
+        this.gameRole = null;
+    }
+
     public Long getId() {
         return id;
     }
