@@ -238,27 +238,41 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
-    void shouldRespectAlreadyAssignedTeamsDuringAutoDistribution() throws Exception {
+    void shouldRebalanceAllParticipantsDuringAutoDistribution() throws Exception {
         String sessionCode = createSession("Командная сессия", 2);
         joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
         joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
         joinPlayer("Павел Орлов", "Главный врач", sessionCode);
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode);
 
-        Long participantId = firstParticipantId(sessionCode);
         Long firstTeamId = firstTeamId(sessionCode);
-        assignParticipantToTeam(sessionCode, participantId, firstTeamId);
+        Long secondTeamId = teamIdBySortOrder(sessionCode, 2);
+
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Ольга Смирнова"), secondTeamId);
 
         mockMvc.perform(post("/api/game-sessions/{sessionCode}/teams/auto-assign", sessionCode)
                         .with(auth()))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teams[0].memberCount").value(2))
+                .andExpect(jsonPath("$.teams[1].memberCount").value(2));
 
-        Long preservedTeamId = jdbcTemplate.queryForObject(
-                "SELECT team_id FROM session_participants WHERE id = ?",
-                Long.class,
-                participantId
+        List<Integer> teamSizes = jdbcTemplate.queryForList(
+                """
+                SELECT COUNT(sp.id)
+                FROM session_teams st
+                LEFT JOIN session_participants sp ON sp.team_id = st.id
+                WHERE st.game_session_id = (SELECT id FROM game_sessions WHERE code = ?)
+                GROUP BY st.id
+                ORDER BY st.sort_order
+                """,
+                Integer.class,
+                sessionCode
         );
 
-        assertThat(preservedTeamId).isEqualTo(firstTeamId);
+        assertThat(teamSizes).containsExactly(2, 2);
     }
 
     @Test

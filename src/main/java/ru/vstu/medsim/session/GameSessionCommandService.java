@@ -155,21 +155,14 @@ public class GameSessionCommandService {
         List<SessionParticipant> participants = sessionParticipantRepository
                 .findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId());
 
+        if (teams.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "В сессии нет доступных команд.");
+        }
+
         Map<Long, Integer> teamMemberCounts = new HashMap<>();
         teams.forEach(team -> teamMemberCounts.put(team.getId(), 0));
 
-        participants.stream()
-                .filter(participant -> participant.getTeam() != null)
-                .forEach(participant -> teamMemberCounts.computeIfPresent(
-                        participant.getTeam().getId(),
-                        (teamId, count) -> count + 1
-                ));
-
-        List<SessionParticipant> unassignedParticipants = participants.stream()
-                .filter(participant -> participant.getTeam() == null)
-                .toList();
-
-        for (SessionParticipant participant : unassignedParticipants) {
+        for (SessionParticipant participant : participants) {
             SessionTeam targetTeam = teams.stream()
                     .min(Comparator
                             .comparingInt((SessionTeam team) -> teamMemberCounts.getOrDefault(team.getId(), 0))
