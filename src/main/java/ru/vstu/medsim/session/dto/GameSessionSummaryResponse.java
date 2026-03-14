@@ -6,6 +6,7 @@ public record GameSessionSummaryResponse(
         String sessionName,
         String sessionStatus,
         long participantCount,
+        long teamCount,
         long stageCount
 ) {
 }

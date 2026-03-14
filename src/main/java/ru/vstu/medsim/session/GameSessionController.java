@@ -13,11 +13,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
-import ru.vstu.medsim.session.dto.GameSessionRenameRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
+import ru.vstu.medsim.session.dto.GameSessionRenameRequest;
 import ru.vstu.medsim.session.dto.GameSessionRoleAssignmentRequest;
 import ru.vstu.medsim.session.dto.GameSessionStageSettingsRequest;
 import ru.vstu.medsim.session.dto.GameSessionSummaryResponse;
+import ru.vstu.medsim.session.dto.GameSessionTeamAssignmentRequest;
+import ru.vstu.medsim.session.dto.GameSessionTeamRenameRequest;
 
 import java.util.List;
 
@@ -57,6 +59,29 @@ public class GameSessionController {
             @Valid @RequestBody GameSessionRenameRequest request
     ) {
         return gameSessionCommandService.renameSession(sessionCode, request);
+    }
+
+    @PatchMapping("/{sessionCode}/teams/{teamId}/name")
+    public GameSessionParticipantsResponse renameTeam(
+            @PathVariable String sessionCode,
+            @PathVariable Long teamId,
+            @Valid @RequestBody GameSessionTeamRenameRequest request
+    ) {
+        return gameSessionCommandService.renameTeam(sessionCode, teamId, request);
+    }
+
+    @PostMapping("/{sessionCode}/teams/auto-assign")
+    public GameSessionParticipantsResponse autoAssignTeams(@PathVariable String sessionCode) {
+        return gameSessionCommandService.autoAssignTeams(sessionCode);
+    }
+
+    @PatchMapping("/{sessionCode}/participants/{participantId}/team")
+    public GameSessionParticipantsResponse assignParticipantTeam(
+            @PathVariable String sessionCode,
+            @PathVariable Long participantId,
+            @Valid @RequestBody GameSessionTeamAssignmentRequest request
+    ) {
+        return gameSessionCommandService.assignParticipantTeam(sessionCode, participantId, request);
     }
 
     @PutMapping("/{sessionCode}/stages")

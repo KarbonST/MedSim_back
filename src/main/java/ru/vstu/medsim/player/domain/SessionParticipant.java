@@ -11,6 +11,8 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
+import ru.vstu.medsim.session.domain.SessionTeam;
+
 import java.time.LocalDateTime;
 
 @Entity
@@ -31,6 +33,10 @@ public class SessionParticipant {
     @ManyToOne(optional = false)
     @JoinColumn(name = "player_id", nullable = false)
     private Player player;
+
+    @ManyToOne
+    @JoinColumn(name = "team_id")
+    private SessionTeam team;
 
     @Column(name = "game_role", length = 100)
     private String gameRole;
@@ -53,6 +59,10 @@ public class SessionParticipant {
         }
     }
 
+    public void assignTeam(SessionTeam team) {
+        this.team = team;
+    }
+
     public void assignGameRole(String gameRole) {
         this.gameRole = gameRole;
     }
@@ -67,6 +77,10 @@ public class SessionParticipant {
 
     public Player getPlayer() {
         return player;
+    }
+
+    public SessionTeam getTeam() {
+        return team;
     }
 
     public String getGameRole() {

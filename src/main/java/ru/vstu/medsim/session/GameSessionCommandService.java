@@ -12,19 +12,26 @@ import ru.vstu.medsim.player.repository.GameSessionRepository;
 import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.domain.SessionStageSetting;
+import ru.vstu.medsim.session.domain.SessionTeam;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
-import ru.vstu.medsim.session.dto.GameSessionRenameRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
+import ru.vstu.medsim.session.dto.GameSessionRenameRequest;
 import ru.vstu.medsim.session.dto.GameSessionRoleAssignmentRequest;
 import ru.vstu.medsim.session.dto.GameSessionStageSettingsRequest;
 import ru.vstu.medsim.session.dto.GameSessionSummaryResponse;
+import ru.vstu.medsim.session.dto.GameSessionTeamAssignmentRequest;
+import ru.vstu.medsim.session.dto.GameSessionTeamRenameRequest;
 import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
+import ru.vstu.medsim.session.repository.SessionTeamRepository;
 
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
@@ -36,6 +43,35 @@ public class GameSessionCommandService {
     private static final int SESSION_CODE_PREFIX_LENGTH = 4;
     private static final int SESSION_CODE_MAX_ATTEMPTS = 200;
     private static final SecureRandom SESSION_CODE_RANDOM = new SecureRandom();
+
+    private static final List<String> TEAM_NAME_ADJECTIVES = List.of(
+            "Бодрые",
+            "Лихие",
+            "Срочные",
+            "Ночные",
+            "Шустрые",
+            "Отважные",
+            "Невозмутимые",
+            "Улыбчивые",
+            "Боевые",
+            "Дежурные",
+            "Летучие",
+            "Хитрые"
+    );
+    private static final List<String> TEAM_NAME_NOUNS = List.of(
+            "Капельницы",
+            "Бинты",
+            "Термометры",
+            "Шприцы",
+            "Таблетки",
+            "Каталки",
+            "Пипетки",
+            "Ампулы",
+            "Компрессы",
+            "Градусники",
+            "Халаты",
+            "Пластыри"
+    );
 
     private static final List<String> MANDATORY_LEADERSHIP_ROLES = List.of(
             "Главный врач",
@@ -54,19 +90,22 @@ public class GameSessionCommandService {
     private final SessionParticipantRepository sessionParticipantRepository;
     private final PlayerRepository playerRepository;
     private final SessionStageSettingRepository sessionStageSettingRepository;
+    private final SessionTeamRepository sessionTeamRepository;
 
     public GameSessionCommandService(
             GameSessionQueryService gameSessionQueryService,
             GameSessionRepository gameSessionRepository,
             SessionParticipantRepository sessionParticipantRepository,
             PlayerRepository playerRepository,
-            SessionStageSettingRepository sessionStageSettingRepository
+            SessionStageSettingRepository sessionStageSettingRepository,
+            SessionTeamRepository sessionTeamRepository
     ) {
         this.gameSessionQueryService = gameSessionQueryService;
         this.gameSessionRepository = gameSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.playerRepository = playerRepository;
         this.sessionStageSettingRepository = sessionStageSettingRepository;
+        this.sessionTeamRepository = sessionTeamRepository;
     }
 
     @Transactional
@@ -78,6 +117,11 @@ public class GameSessionCommandService {
                 new GameSession(sessionCode, sessionName, GameSessionStatus.LOBBY)
         );
 
+        List<SessionTeam> teams = generateFunnyTeamNames(request.teamCount()).stream()
+                .map(name -> new SessionTeam(session, name.name(), name.sortOrder()))
+                .toList();
+        sessionTeamRepository.saveAll(teams);
+
         return toSummary(session);
     }
 
@@ -86,6 +130,73 @@ public class GameSessionCommandService {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
         session.rename(request.sessionName().trim());
         return toSummary(gameSessionRepository.save(session));
+    }
+
+    @Transactional
+    public GameSessionParticipantsResponse renameTeam(
+            String sessionCode,
+            Long teamId,
+            GameSessionTeamRenameRequest request
+    ) {
+        GameSession session = getLobbySessionOrThrow(sessionCode);
+        SessionTeam team = sessionTeamRepository.findByIdAndGameSessionId(teamId, session.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Команда не найдена."));
+
+        team.rename(request.teamName().trim());
+        sessionTeamRepository.save(team);
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
+    public GameSessionParticipantsResponse autoAssignTeams(String sessionCode) {
+        GameSession session = getLobbySessionOrThrow(sessionCode);
+        List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId());
+        List<SessionParticipant> participants = sessionParticipantRepository
+                .findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId());
+
+        Map<Long, Integer> teamMemberCounts = new HashMap<>();
+        teams.forEach(team -> teamMemberCounts.put(team.getId(), 0));
+
+        participants.stream()
+                .filter(participant -> participant.getTeam() != null)
+                .forEach(participant -> teamMemberCounts.computeIfPresent(
+                        participant.getTeam().getId(),
+                        (teamId, count) -> count + 1
+                ));
+
+        List<SessionParticipant> unassignedParticipants = participants.stream()
+                .filter(participant -> participant.getTeam() == null)
+                .toList();
+
+        for (SessionParticipant participant : unassignedParticipants) {
+            SessionTeam targetTeam = teams.stream()
+                    .min(Comparator
+                            .comparingInt((SessionTeam team) -> teamMemberCounts.getOrDefault(team.getId(), 0))
+                            .thenComparingInt(SessionTeam::getSortOrder))
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.CONFLICT, "В сессии нет доступных команд."));
+
+            participant.assignTeam(targetTeam);
+            teamMemberCounts.computeIfPresent(targetTeam.getId(), (teamId, count) -> count + 1);
+        }
+
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
+    public GameSessionParticipantsResponse assignParticipantTeam(
+            String sessionCode,
+            Long participantId,
+            GameSessionTeamAssignmentRequest request
+    ) {
+        GameSession session = getLobbySessionOrThrow(sessionCode);
+        SessionParticipant participant = sessionParticipantRepository
+                .findByIdAndGameSessionId(participantId, session.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Участник не найден."));
+        SessionTeam team = sessionTeamRepository.findByIdAndGameSessionId(request.teamId(), session.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Команда не найдена."));
+
+        participant.assignTeam(team);
+        return gameSessionQueryService.getParticipants(sessionCode);
     }
 
     @Transactional
@@ -115,12 +226,15 @@ public class GameSessionCommandService {
     public GameSessionParticipantsResponse assignRandomRoles(String sessionCode) {
         GameSession session = getLobbySessionOrThrow(sessionCode);
         List<SessionParticipant> participants = sessionParticipantRepository
-                .findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId());
+                .findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId())
+                .stream()
+                .filter(participant -> participant.getTeam() != null)
+                .toList();
 
         if (participants.size() < MANDATORY_LEADERSHIP_ROLES.size()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Для автоматического распределения ролей нужно минимум 3 участника."
+                    "Для автоматического распределения ролей нужно минимум 3 участника, уже распределённых по командам."
             );
         }
 
@@ -161,6 +275,13 @@ public class GameSessionCommandService {
         SessionParticipant participant = sessionParticipantRepository
                 .findByIdAndGameSessionId(participantId, session.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Участник не найден."));
+
+        if (participant.getTeam() == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Сначала распределите участника по команде, а затем назначайте игровую роль."
+            );
+        }
 
         participant.assignGameRole(request.gameRole().trim());
         return toParticipantItem(participant);
@@ -206,6 +327,7 @@ public class GameSessionCommandService {
 
         sessionStageSettingRepository.deleteAllByGameSessionId(session.getId());
         sessionParticipantRepository.deleteAllByGameSessionId(session.getId());
+        sessionTeamRepository.deleteAll(sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId()));
         gameSessionRepository.delete(session);
 
         if (playerIds.isEmpty()) {
@@ -303,7 +425,7 @@ public class GameSessionCommandService {
         if (session.getStatus() != GameSessionStatus.LOBBY) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Настройки этапов и ролей можно менять только до старта игры."
+                    "Настройки этапов, команд и ролей можно менять только до старта игры."
             );
         }
 
@@ -316,6 +438,8 @@ public class GameSessionCommandService {
                 participant.getPlayer().getId(),
                 participant.getPlayer().getDisplayName(),
                 participant.getPlayer().getHospitalPosition(),
+                participant.getTeam() != null ? participant.getTeam().getId() : null,
+                participant.getTeam() != null ? participant.getTeam().getName() : null,
                 participant.getGameRole(),
                 participant.getJoinedAt()
         );
@@ -328,12 +452,31 @@ public class GameSessionCommandService {
                 session.getName(),
                 session.getStatus().name(),
                 sessionParticipantRepository.countByGameSessionId(session.getId()),
+                sessionTeamRepository.countByGameSessionId(session.getId()),
                 sessionStageSettingRepository.countByGameSessionId(session.getId())
         );
     }
 
-    private String normalizeCode(String sessionCode) {
-        return sessionCode.trim().toUpperCase();
+    private List<TeamNameDraft> generateFunnyTeamNames(int teamCount) {
+        List<TeamNameDraft> generatedNames = new ArrayList<>();
+        List<String> combinations = new ArrayList<>();
+
+        for (String adjective : TEAM_NAME_ADJECTIVES) {
+            for (String noun : TEAM_NAME_NOUNS) {
+                combinations.add(adjective + " " + noun);
+            }
+        }
+
+        Collections.shuffle(combinations, SESSION_CODE_RANDOM);
+
+        for (int index = 0; index < teamCount; index++) {
+            String name = index < combinations.size()
+                    ? combinations.get(index)
+                    : combinations.get(index % combinations.size()) + " " + (index + 1);
+            generatedNames.add(new TeamNameDraft(name, index + 1));
+        }
+
+        return generatedNames;
     }
 
     private String generateUniqueSessionCode() {
@@ -364,5 +507,8 @@ public class GameSessionCommandService {
     }
 
     private record Assignment(SessionParticipant participant, String role) {
+    }
+
+    private record TeamNameDraft(String name, int sortOrder) {
     }
 }

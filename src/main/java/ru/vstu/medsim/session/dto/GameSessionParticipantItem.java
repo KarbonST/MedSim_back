@@ -7,6 +7,8 @@ public record GameSessionParticipantItem(
         Long playerId,
         String displayName,
         String hospitalPosition,
+        Long teamId,
+        String teamName,
         String gameRole,
         LocalDateTime joinedAt
 ) {
