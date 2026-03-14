@@ -55,6 +55,27 @@ public class GameSession {
         }
     }
 
+    public void start() {
+        if (status == GameSessionStatus.FINISHED) {
+            throw new IllegalStateException("Нельзя запустить завершённую сессию.");
+        }
+
+        status = GameSessionStatus.IN_PROGRESS;
+
+        if (startedAt == null) {
+            startedAt = LocalDateTime.now();
+        }
+    }
+
+    public void finish() {
+        if (status == GameSessionStatus.FINISHED) {
+            throw new IllegalStateException("Сессия уже завершена.");
+        }
+
+        status = GameSessionStatus.FINISHED;
+        finishedAt = LocalDateTime.now();
+    }
+
     public Long getId() {
         return id;
     }
@@ -73,5 +94,13 @@ public class GameSession {
 
     public LocalDateTime getCreatedAt() {
         return createdAt;
+    }
+
+    public LocalDateTime getStartedAt() {
+        return startedAt;
+    }
+
+    public LocalDateTime getFinishedAt() {
+        return finishedAt;
     }
 }

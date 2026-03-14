@@ -21,7 +21,7 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
                 .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers("/api/player-sessions/**").permitAll()
+                        .requestMatchers("/api/player-sessions/**", "/api/game-sessions/**").permitAll()
                         .anyRequest().permitAll()
                 )
                 .httpBasic(Customizer.withDefaults())
