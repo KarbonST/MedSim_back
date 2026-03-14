@@ -12,6 +12,7 @@ import ru.vstu.medsim.player.repository.GameSessionRepository;
 import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.domain.SessionStageSetting;
+import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
 import ru.vstu.medsim.session.dto.GameSessionRoleAssignmentRequest;
@@ -59,6 +60,25 @@ public class GameSessionCommandService {
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.playerRepository = playerRepository;
         this.sessionStageSettingRepository = sessionStageSettingRepository;
+    }
+
+    @Transactional
+    public GameSessionSummaryResponse createSession(GameSessionCreateRequest request) {
+        String sessionCode = normalizeCode(request.sessionCode());
+        String sessionName = request.sessionName().trim();
+
+        if (gameSessionRepository.findByCode(sessionCode).isPresent()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Сессия с таким кодом уже существует."
+            );
+        }
+
+        GameSession session = gameSessionRepository.save(
+                new GameSession(sessionCode, sessionName, GameSessionStatus.LOBBY)
+        );
+
+        return toSummary(session);
     }
 
     @Transactional
@@ -303,6 +323,10 @@ public class GameSessionCommandService {
                 sessionParticipantRepository.countByGameSessionId(session.getId()),
                 sessionStageSettingRepository.countByGameSessionId(session.getId())
         );
+    }
+
+    private String normalizeCode(String sessionCode) {
+        return sessionCode.trim().toUpperCase();
     }
 
     private record Assignment(SessionParticipant participant, String role) {

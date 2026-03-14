@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
 import ru.vstu.medsim.session.dto.GameSessionRoleAssignmentRequest;
@@ -37,6 +38,11 @@ public class GameSessionController {
     @GetMapping
     public List<GameSessionSummaryResponse> getSessions() {
         return gameSessionQueryService.getAllSessions();
+    }
+
+    @PostMapping
+    public GameSessionSummaryResponse createSession(@Valid @RequestBody GameSessionCreateRequest request) {
+        return gameSessionCommandService.createSession(request);
     }
 
     @GetMapping("/{sessionCode}/participants")
