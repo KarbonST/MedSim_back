@@ -182,6 +182,53 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
+    void shouldReturnPlayerWorkspaceOnlyForOwnTeam() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
+        joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
+        joinPlayer("Павел Орлов", "Главный врач", sessionCode);
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode);
+
+        Long firstTeamId = firstTeamId(sessionCode);
+        Long secondTeamId = teamIdBySortOrder(sessionCode, 2);
+
+        Long annaId = participantIdByName(sessionCode, "Анна Петрова");
+        Long ivanId = participantIdByName(sessionCode, "Иван Сидоров");
+        Long pavelId = participantIdByName(sessionCode, "Павел Орлов");
+        Long olgaId = participantIdByName(sessionCode, "Ольга Смирнова");
+
+        assignParticipantToTeam(sessionCode, annaId, firstTeamId);
+        assignParticipantToTeam(sessionCode, ivanId, firstTeamId);
+        assignParticipantToTeam(sessionCode, pavelId, secondTeamId);
+        assignParticipantToTeam(sessionCode, olgaId, secondTeamId);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/participants/{participantId}/role", sessionCode, annaId)
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("gameRole", "Главный врач"))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/participants/{participantId}/role", sessionCode, ivanId)
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("gameRole", "Главная медсестра"))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, annaId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("IN_PROGRESS"))
+                .andExpect(jsonPath("$.teamId").value(firstTeamId))
+                .andExpect(jsonPath("$.teammates.length()").value(2))
+                .andExpect(jsonPath("$.teammates[0].displayName").value("Анна Петрова"))
+                .andExpect(jsonPath("$.teammates[1].displayName").value("Иван Сидоров"));
+    }
+
+    @Test
     void shouldReuseExistingParticipantForSamePlayerAndSession() throws Exception {
         String sessionCode = createSession("Инженерная сессия", 2);
 

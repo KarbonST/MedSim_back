@@ -11,9 +11,13 @@ import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.player.dto.AvailablePlayerSessionResponse;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinRequest;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinResponse;
+import ru.vstu.medsim.player.dto.PlayerTeamWorkspaceMemberResponse;
+import ru.vstu.medsim.player.dto.PlayerTeamWorkspaceResponse;
 import ru.vstu.medsim.player.repository.GameSessionRepository;
 import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
+import ru.vstu.medsim.session.dto.SessionStageSettingItem;
+import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
 
 import java.util.List;
 
@@ -23,15 +27,18 @@ public class PlayerSessionService {
     private final PlayerRepository playerRepository;
     private final GameSessionRepository gameSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
+    private final SessionStageSettingRepository sessionStageSettingRepository;
 
     public PlayerSessionService(
             PlayerRepository playerRepository,
             GameSessionRepository gameSessionRepository,
-            SessionParticipantRepository sessionParticipantRepository
+            SessionParticipantRepository sessionParticipantRepository,
+            SessionStageSettingRepository sessionStageSettingRepository
     ) {
         this.playerRepository = playerRepository;
         this.gameSessionRepository = gameSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
+        this.sessionStageSettingRepository = sessionStageSettingRepository;
     }
 
     @Transactional(readOnly = true)
@@ -83,6 +90,64 @@ public class PlayerSessionService {
                 player.getHospitalPosition(),
                 participant.getGameRole(),
                 participant.getJoinedAt()
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public PlayerTeamWorkspaceResponse getWorkspace(String sessionCode, Long participantId) {
+        String normalizedCode = normalizeCode(sessionCode);
+
+        GameSession session = gameSessionRepository.findByCode(normalizedCode)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Сессия с таким кодом не найдена."
+                ));
+
+        SessionParticipant participant = sessionParticipantRepository.findByIdAndGameSessionId(participantId, session.getId())
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Участник не найден в указанной сессии."
+                ));
+
+        List<PlayerTeamWorkspaceMemberResponse> teammates = participant.getTeam() == null
+                ? List.of()
+                : sessionParticipantRepository.findAllByGameSessionIdAndTeamIdOrderByJoinedAtAscIdAsc(
+                                session.getId(),
+                                participant.getTeam().getId()
+                        ).stream()
+                        .map(teammate -> new PlayerTeamWorkspaceMemberResponse(
+                                teammate.getId(),
+                                teammate.getPlayer().getDisplayName(),
+                                teammate.getPlayer().getHospitalPosition(),
+                                teammate.getGameRole(),
+                                teammate.getId().equals(participant.getId())
+                        ))
+                        .toList();
+
+        List<SessionStageSettingItem> stages = sessionStageSettingRepository
+                .findAllByGameSessionIdOrderByStageNumberAsc(session.getId())
+                .stream()
+                .map(stage -> new SessionStageSettingItem(
+                        stage.getStageNumber(),
+                        stage.getDurationMinutes(),
+                        stage.getInteractionMode().name()
+                ))
+                .toList();
+
+        return new PlayerTeamWorkspaceResponse(
+                participant.getId(),
+                participant.getPlayer().getId(),
+                session.getId(),
+                session.getCode(),
+                session.getName(),
+                session.getStatus().name(),
+                participant.getPlayer().getDisplayName(),
+                participant.getPlayer().getHospitalPosition(),
+                participant.getGameRole(),
+                participant.getTeam() != null ? participant.getTeam().getId() : null,
+                participant.getTeam() != null ? participant.getTeam().getName() : null,
+                teammates,
+                stages
         );
     }
 
