@@ -84,6 +84,10 @@ public class GameSession {
         return code;
     }
 
+    public void rename(String name) {
+        this.name = name;
+    }
+
     public String getName() {
         return name;
     }

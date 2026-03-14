@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
+import ru.vstu.medsim.session.dto.GameSessionRenameRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
 import ru.vstu.medsim.session.dto.GameSessionRoleAssignmentRequest;
 import ru.vstu.medsim.session.dto.GameSessionStageSettingsRequest;
@@ -48,6 +49,14 @@ public class GameSessionController {
     @GetMapping("/{sessionCode}/participants")
     public GameSessionParticipantsResponse getParticipants(@PathVariable String sessionCode) {
         return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @PatchMapping("/{sessionCode}/name")
+    public GameSessionSummaryResponse renameSession(
+            @PathVariable String sessionCode,
+            @Valid @RequestBody GameSessionRenameRequest request
+    ) {
+        return gameSessionCommandService.renameSession(sessionCode, request);
     }
 
     @PutMapping("/{sessionCode}/stages")

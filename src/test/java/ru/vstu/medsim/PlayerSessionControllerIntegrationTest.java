@@ -79,6 +79,27 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
+    void shouldRenameGameSessionForFacilitator() throws Exception {
+        createSession("WARD-12", "Тестовая смена");
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/name", "WARD-12")
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("sessionName", "Обновлённая смена"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionCode").value("WARD-12"))
+                .andExpect(jsonPath("$.sessionName").value("Обновлённая смена"));
+
+        String sessionName = jdbcTemplate.queryForObject(
+                "SELECT name FROM game_sessions WHERE code = ?",
+                String.class,
+                "WARD-12"
+        );
+
+        assertThat(sessionName).isEqualTo("Обновлённая смена");
+    }
+
+    @Test
     void shouldReturnAvailableLobbySessionsForPlayers() throws Exception {
         createSession("WARD-12", "Приёмное отделение");
         createSession("ENG-01", "Инженерный штаб");

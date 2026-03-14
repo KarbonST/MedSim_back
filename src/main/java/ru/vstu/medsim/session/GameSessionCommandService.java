@@ -14,6 +14,7 @@ import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.domain.SessionStageSetting;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
+import ru.vstu.medsim.session.dto.GameSessionRenameRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
 import ru.vstu.medsim.session.dto.GameSessionRoleAssignmentRequest;
 import ru.vstu.medsim.session.dto.GameSessionStageSettingsRequest;
@@ -79,6 +80,13 @@ public class GameSessionCommandService {
         );
 
         return toSummary(session);
+    }
+
+    @Transactional
+    public GameSessionSummaryResponse renameSession(String sessionCode, GameSessionRenameRequest request) {
+        GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+        session.rename(request.sessionName().trim());
+        return toSummary(gameSessionRepository.save(session));
     }
 
     @Transactional
