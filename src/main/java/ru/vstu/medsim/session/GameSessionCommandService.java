@@ -84,6 +84,7 @@ public class GameSessionCommandService {
             "Заместитель главного инженера по медтехнике",
             "Заместитель главного инженера по АХЧ"
     );
+    private static final int MAX_UNIQUE_TEAM_ROLE_COUNT = MANDATORY_LEADERSHIP_ROLES.size() + EXECUTOR_ROLES.size();
 
     private final GameSessionQueryService gameSessionQueryService;
     private final GameSessionRepository gameSessionRepository;
@@ -231,6 +232,8 @@ public class GameSessionCommandService {
                 .filter(participant -> participant.getTeam() != null)
                 .toList();
 
+        List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId());
+
         if (participants.size() < MANDATORY_LEADERSHIP_ROLES.size()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
@@ -238,30 +241,15 @@ public class GameSessionCommandService {
             );
         }
 
-        List<SessionParticipant> shuffledParticipants = new ArrayList<>(participants);
-        Collections.shuffle(shuffledParticipants, ThreadLocalRandom.current());
-        List<Assignment> assignments = new ArrayList<>();
+        for (SessionTeam team : teams) {
+            List<SessionParticipant> teamParticipants = participants.stream()
+                    .filter(participant -> participant.getTeam() != null && participant.getTeam().getId().equals(team.getId()))
+                    .toList();
 
-        if (!assignLeadershipRoles(shuffledParticipants, 0, assignments)) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Невозможно выполнить распределение без совпадения должностей и ролей."
-            );
+            validateTeamRoleAssignment(team, teamParticipants);
+            assignRolesForTeam(team, teamParticipants);
         }
 
-        for (Assignment assignment : assignments) {
-            assignment.participant().assignGameRole(assignment.role());
-        }
-
-        Set<Long> leadershipParticipantIds = assignments.stream()
-                .map(assignment -> assignment.participant().getId())
-                .collect(Collectors.toSet());
-
-        List<SessionParticipant> remainingParticipants = shuffledParticipants.stream()
-                .filter(participant -> !leadershipParticipantIds.contains(participant.getId()))
-                .toList();
-
-        assignExecutorRoles(remainingParticipants);
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 
@@ -344,6 +332,55 @@ public class GameSessionCommandService {
         }
     }
 
+    private void validateTeamRoleAssignment(SessionTeam team, List<SessionParticipant> teamParticipants) {
+        if (teamParticipants.size() < MANDATORY_LEADERSHIP_ROLES.size()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "В команде '%s' недостаточно участников для обязательных руководящих ролей.".formatted(team.getName())
+            );
+        }
+
+        if (teamParticipants.size() > MAX_UNIQUE_TEAM_ROLE_COUNT) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "В команде '%s' слишком много участников для уникального распределения ролей без повторов.".formatted(team.getName())
+            );
+        }
+    }
+
+    private void assignRolesForTeam(SessionTeam team, List<SessionParticipant> teamParticipants) {
+        List<SessionParticipant> shuffledParticipants = new ArrayList<>(teamParticipants);
+        Collections.shuffle(shuffledParticipants, ThreadLocalRandom.current());
+
+        List<Assignment> leadershipAssignments = new ArrayList<>();
+        if (!assignLeadershipRoles(shuffledParticipants, 0, leadershipAssignments)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Невозможно назначить руководящие роли в команде '%s' без совпадения с реальными должностями.".formatted(team.getName())
+            );
+        }
+
+        leadershipAssignments.forEach(assignment -> assignment.participant().assignGameRole(assignment.role()));
+
+        Set<Long> leadershipParticipantIds = leadershipAssignments.stream()
+                .map(assignment -> assignment.participant().getId())
+                .collect(Collectors.toSet());
+
+        List<SessionParticipant> remainingParticipants = shuffledParticipants.stream()
+                .filter(participant -> !leadershipParticipantIds.contains(participant.getId()))
+                .toList();
+
+        List<Assignment> executorAssignments = new ArrayList<>();
+        if (!assignUniqueExecutorRoles(remainingParticipants, 0, new ArrayList<>(EXECUTOR_ROLES), executorAssignments)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Невозможно назначить уникальные исполнительские роли в команде '%s' без совпадения с реальными должностями.".formatted(team.getName())
+            );
+        }
+
+        executorAssignments.forEach(assignment -> assignment.participant().assignGameRole(assignment.role()));
+    }
+
     private boolean assignLeadershipRoles(
             List<SessionParticipant> participants,
             int roleIndex,
@@ -376,30 +413,39 @@ public class GameSessionCommandService {
         return false;
     }
 
-    private void assignExecutorRoles(List<SessionParticipant> participants) {
-        for (int participantIndex = 0; participantIndex < participants.size(); participantIndex++) {
-            SessionParticipant participant = participants.get(participantIndex);
-            participant.assignGameRole(selectExecutorRole(participant, participantIndex));
+    private boolean assignUniqueExecutorRoles(
+            List<SessionParticipant> participants,
+            int participantIndex,
+            List<String> availableRoles,
+            List<Assignment> assignments
+    ) {
+        if (participantIndex >= participants.size()) {
+            return true;
         }
-    }
 
-    private String selectExecutorRole(SessionParticipant participant, int offset) {
-        List<String> shuffledRoles = new ArrayList<>(EXECUTOR_ROLES);
+        SessionParticipant participant = participants.get(participantIndex);
+        List<String> shuffledRoles = new ArrayList<>(availableRoles);
         Collections.shuffle(shuffledRoles, ThreadLocalRandom.current());
 
-        for (int index = 0; index < shuffledRoles.size(); index++) {
-            String role = shuffledRoles.get((offset + index) % shuffledRoles.size());
+        for (String role : shuffledRoles) {
             boolean matchesHospitalPosition = participant.getPlayer().getHospitalPosition().equalsIgnoreCase(role);
 
-            if (!matchesHospitalPosition) {
-                return role;
+            if (matchesHospitalPosition) {
+                continue;
             }
+
+            assignments.add(new Assignment(participant, role));
+            List<String> nextAvailableRoles = new ArrayList<>(availableRoles);
+            nextAvailableRoles.remove(role);
+
+            if (assignUniqueExecutorRoles(participants, participantIndex + 1, nextAvailableRoles, assignments)) {
+                return true;
+            }
+
+            assignments.removeLast();
         }
 
-        throw new ResponseStatusException(
-                HttpStatus.CONFLICT,
-                "Невозможно назначить исполнительскую роль без совпадения с реальной должностью."
-        );
+        return false;
     }
 
     private void validateStageSettings(List<GameSessionStageSettingsRequest.StageItem> stages) {

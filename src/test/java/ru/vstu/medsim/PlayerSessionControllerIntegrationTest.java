@@ -290,26 +290,117 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
-    void shouldAssignRandomRolesOnlyForParticipantsWithTeams() throws Exception {
+    void shouldAssignUniqueRolesInsideEachTeamAndGuaranteeLeadershipRoles() throws Exception {
         String sessionCode = createSession("Тестовая смена", 2);
-        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
-        joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
-        joinPlayer("Павел Орлов", "Главный врач", sessionCode);
-        mockMvc.perform(post("/api/game-sessions/{sessionCode}/teams/auto-assign", sessionCode)
-                        .with(auth()))
-                .andExpect(status().isOk());
+
+        joinPlayer("Анна Петрова", "Главный врач", sessionCode);
+        joinPlayer("Иван Сидоров", "Главная медсестра", sessionCode);
+        joinPlayer("Павел Орлов", "Главный инженер", sessionCode);
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode);
+        joinPlayer("Елена Миронова", "Сестра диагностического отделения", sessionCode);
+        joinPlayer("Сергей Андреев", "Заместитель главного инженера по медтехнике", sessionCode);
+        joinPlayer("Марина Котова", "Заместитель главного инженера по АХЧ", sessionCode);
+        joinPlayer("Лев Борисов", "Главный врач", sessionCode);
+        joinPlayer("Алина Громова", "Главная медсестра", sessionCode);
+        joinPlayer("Денис Фролов", "Главный инженер", sessionCode);
+        joinPlayer("Татьяна Белова", "Сестра поликлинического отделения", sessionCode);
+        joinPlayer("Владимир Егоров", "Сестра диагностического отделения", sessionCode);
+        joinPlayer("Ирина Левина", "Заместитель главного инженера по медтехнике", sessionCode);
+        joinPlayer("Максим Орехов", "Заместитель главного инженера по АХЧ", sessionCode);
+
+        Long firstTeamId = teamIdBySortOrder(sessionCode, 1);
+        Long secondTeamId = teamIdBySortOrder(sessionCode, 2);
+
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Ольга Смирнова"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Елена Миронова"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Сергей Андреев"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Марина Котова"), firstTeamId);
+
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Лев Борисов"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Алина Громова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Денис Фролов"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Татьяна Белова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Владимир Егоров"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Ирина Левина"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Максим Орехов"), secondTeamId);
 
         mockMvc.perform(post("/api/game-sessions/{sessionCode}/roles/random", sessionCode)
                         .with(auth()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.participants.length()").value(3));
+                .andExpect(jsonPath("$.participants.length()").value(14));
 
-        List<String> assignedRoles = jdbcTemplate.queryForList(
-                "SELECT game_role FROM session_participants ORDER BY id",
-                String.class
+        List<Integer> leadershipCounts = jdbcTemplate.queryForList(
+                """
+                SELECT COUNT(*)
+                FROM session_participants sp
+                JOIN session_teams st ON st.id = sp.team_id
+                JOIN game_sessions gs ON gs.id = sp.game_session_id
+                WHERE gs.code = ?
+                  AND sp.game_role IN ('Главный врач', 'Главная медсестра', 'Главный инженер')
+                GROUP BY st.sort_order
+                ORDER BY st.sort_order
+                """,
+                Integer.class,
+                sessionCode
         );
 
-        assertThat(assignedRoles).contains("Главный врач", "Главная медсестра", "Главный инженер");
+        List<Integer> distinctRoleCounts = jdbcTemplate.queryForList(
+                """
+                SELECT COUNT(DISTINCT sp.game_role)
+                FROM session_participants sp
+                JOIN session_teams st ON st.id = sp.team_id
+                JOIN game_sessions gs ON gs.id = sp.game_session_id
+                WHERE gs.code = ?
+                GROUP BY st.sort_order
+                ORDER BY st.sort_order
+                """,
+                Integer.class,
+                sessionCode
+        );
+
+        Integer conflictingAssignments = jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM session_participants sp
+                JOIN players p ON p.id = sp.player_id
+                JOIN game_sessions gs ON gs.id = sp.game_session_id
+                WHERE gs.code = ?
+                  AND LOWER(p.hospital_position) = LOWER(sp.game_role)
+                """,
+                Integer.class,
+                sessionCode
+        );
+
+        assertThat(leadershipCounts).containsExactly(3, 3);
+        assertThat(distinctRoleCounts).containsExactly(7, 7);
+        assertThat(conflictingAssignments).isZero();
+    }
+
+    @Test
+    void shouldRejectRandomRoleAssignmentWhenAnyTeamHasTooFewParticipantsForLeadershipRoles() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+
+        joinPlayer("Анна Петрова", "Другая должность", sessionCode);
+        joinPlayer("Иван Сидоров", "Другая должность", sessionCode);
+        joinPlayer("Павел Орлов", "Другая должность", sessionCode);
+        joinPlayer("Ольга Смирнова", "Другая должность", sessionCode);
+        joinPlayer("Елена Миронова", "Другая должность", sessionCode);
+
+        Long firstTeamId = teamIdBySortOrder(sessionCode, 1);
+        Long secondTeamId = teamIdBySortOrder(sessionCode, 2);
+
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Ольга Смирнова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Елена Миронова"), secondTeamId);
+
+        mockMvc.perform(post("/api/game-sessions/{sessionCode}/roles/random", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isConflict());
     }
 
     @Test
@@ -477,6 +568,38 @@ class PlayerSessionControllerIntegrationTest {
                 """,
                 Long.class,
                 sessionCode
+        );
+    }
+
+    private Long teamIdBySortOrder(String sessionCode, int sortOrder) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT st.id
+                FROM session_teams st
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.sort_order = ?
+                """,
+                Long.class,
+                sessionCode,
+                sortOrder
+        );
+    }
+
+    private Long participantIdByName(String sessionCode, String displayName) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT sp.id
+                FROM session_participants sp
+                JOIN players p ON p.id = sp.player_id
+                JOIN game_sessions gs ON gs.id = sp.game_session_id
+                WHERE gs.code = ?
+                  AND p.display_name = ?
+                LIMIT 1
+                """,
+                Long.class,
+                sessionCode,
+                displayName
         );
     }
 
