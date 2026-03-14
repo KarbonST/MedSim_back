@@ -12,6 +12,8 @@ public interface GameSessionRepository extends JpaRepository<GameSession, Long> 
 
     Optional<GameSession> findByCode(String code);
 
+    boolean existsByCode(String code);
+
     List<GameSession> findAll(Sort sort);
 
     List<GameSession> findAllByStatusOrderByCreatedAtDescIdDesc(GameSessionStatus status);

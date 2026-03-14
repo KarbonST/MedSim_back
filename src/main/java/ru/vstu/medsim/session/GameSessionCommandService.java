@@ -21,6 +21,7 @@ import ru.vstu.medsim.session.dto.GameSessionStageSettingsRequest;
 import ru.vstu.medsim.session.dto.GameSessionSummaryResponse;
 import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
 
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -30,6 +31,11 @@ import java.util.stream.Collectors;
 
 @Service
 public class GameSessionCommandService {
+
+    private static final String SESSION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+    private static final int SESSION_CODE_PREFIX_LENGTH = 4;
+    private static final int SESSION_CODE_MAX_ATTEMPTS = 200;
+    private static final SecureRandom SESSION_CODE_RANDOM = new SecureRandom();
 
     private static final List<String> MANDATORY_LEADERSHIP_ROLES = List.of(
             "Главный врач",
@@ -65,15 +71,8 @@ public class GameSessionCommandService {
 
     @Transactional
     public GameSessionSummaryResponse createSession(GameSessionCreateRequest request) {
-        String sessionCode = normalizeCode(request.sessionCode());
         String sessionName = request.sessionName().trim();
-
-        if (gameSessionRepository.findByCode(sessionCode).isPresent()) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Сессия с таким кодом уже существует."
-            );
-        }
+        String sessionCode = generateUniqueSessionCode();
 
         GameSession session = gameSessionRepository.save(
                 new GameSession(sessionCode, sessionName, GameSessionStatus.LOBBY)
@@ -335,6 +334,33 @@ public class GameSessionCommandService {
 
     private String normalizeCode(String sessionCode) {
         return sessionCode.trim().toUpperCase();
+    }
+
+    private String generateUniqueSessionCode() {
+        for (int attempt = 0; attempt < SESSION_CODE_MAX_ATTEMPTS; attempt++) {
+            String candidate = generateSessionCodeCandidate();
+
+            if (!gameSessionRepository.existsByCode(candidate)) {
+                return candidate;
+            }
+        }
+
+        throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Не удалось сгенерировать уникальный код сессии. Попробуйте ещё раз."
+        );
+    }
+
+    private String generateSessionCodeCandidate() {
+        StringBuilder prefix = new StringBuilder(SESSION_CODE_PREFIX_LENGTH);
+
+        for (int index = 0; index < SESSION_CODE_PREFIX_LENGTH; index++) {
+            int randomIndex = SESSION_CODE_RANDOM.nextInt(SESSION_CODE_ALPHABET.length());
+            prefix.append(SESSION_CODE_ALPHABET.charAt(randomIndex));
+        }
+
+        int number = SESSION_CODE_RANDOM.nextInt(100);
+        return "%s-%02d".formatted(prefix, number);
     }
 
     private record Assignment(SessionParticipant participant, String role) {

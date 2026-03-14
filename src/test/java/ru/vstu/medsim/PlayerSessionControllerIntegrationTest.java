@@ -1,5 +1,6 @@
 package ru.vstu.medsim;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -10,6 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.util.List;
@@ -66,34 +68,36 @@ class PlayerSessionControllerIntegrationTest {
 
     @Test
     void shouldCreateGameSessionForFacilitator() throws Exception {
-        createSession("WARD-12", "Тестовая смена");
+        String sessionCode = createSession("Тестовая смена");
 
+        assertThat(sessionCode).matches("[A-Z]{4}-\\d{2}");
         assertThat(count("game_sessions")).isEqualTo(1);
 
-        mockMvc.perform(get("/api/game-sessions")
-                        .with(auth()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].sessionCode").value("WARD-12"))
-                .andExpect(jsonPath("$[0].sessionName").value("Тестовая смена"))
-                .andExpect(jsonPath("$[0].sessionStatus").value("LOBBY"));
+        Map<String, Object> session = jdbcTemplate.queryForMap(
+                "SELECT code, name, status FROM game_sessions LIMIT 1"
+        );
+
+        assertThat(session.get("code")).isEqualTo(sessionCode);
+        assertThat(session.get("name")).isEqualTo("Тестовая смена");
+        assertThat(session.get("status")).isEqualTo("LOBBY");
     }
 
     @Test
     void shouldRenameGameSessionForFacilitator() throws Exception {
-        createSession("WARD-12", "Тестовая смена");
+        String sessionCode = createSession("Тестовая смена");
 
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/name", "WARD-12")
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/name", sessionCode)
                         .with(auth())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("sessionName", "Обновлённая смена"))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.sessionCode").value("WARD-12"))
+                .andExpect(jsonPath("$.sessionCode").value(sessionCode))
                 .andExpect(jsonPath("$.sessionName").value("Обновлённая смена"));
 
         String sessionName = jdbcTemplate.queryForObject(
                 "SELECT name FROM game_sessions WHERE code = ?",
                 String.class,
-                "WARD-12"
+                sessionCode
         );
 
         assertThat(sessionName).isEqualTo("Обновлённая смена");
@@ -101,28 +105,28 @@ class PlayerSessionControllerIntegrationTest {
 
     @Test
     void shouldReturnAvailableLobbySessionsForPlayers() throws Exception {
-        createSession("WARD-12", "Приёмное отделение");
-        createSession("ENG-01", "Инженерный штаб");
+        String lobbySessionCode = createSession("Приёмное отделение");
+        String startedSessionCode = createSession("Инженерный штаб");
 
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", "ENG-01")
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", startedSessionCode)
                         .with(auth()))
                 .andExpect(status().isOk());
 
         mockMvc.perform(get("/api/player-sessions/available"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].sessionCode").value("WARD-12"))
+                .andExpect(jsonPath("$[0].sessionCode").value(lobbySessionCode))
                 .andExpect(jsonPath("$[0].sessionName").value("Приёмное отделение"));
     }
 
     @Test
     void shouldJoinPlayerToExistingSessionAndPersistData() throws Exception {
-        createSession("WARD-12", "Тестовая смена");
+        String sessionCode = createSession("Тестовая смена");
 
         var request = Map.of(
                 "displayName", "Анна Петрова",
                 "hospitalPosition", "Главная медсестра",
-                "sessionCode", " ward-12 "
+                "sessionCode", " " + sessionCode.toLowerCase() + " "
         );
 
         mockMvc.perform(post("/api/player-sessions/join")
@@ -131,7 +135,7 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.displayName").value("Анна Петрова"))
                 .andExpect(jsonPath("$.hospitalPosition").value("Главная медсестра"))
-                .andExpect(jsonPath("$.sessionCode").value("WARD-12"))
+                .andExpect(jsonPath("$.sessionCode").value(sessionCode))
                 .andExpect(jsonPath("$.sessionName").value("Тестовая смена"))
                 .andExpect(jsonPath("$.sessionStatus").value("LOBBY"))
                 .andExpect(jsonPath("$.participantId").isNumber())
@@ -163,15 +167,15 @@ class PlayerSessionControllerIntegrationTest {
 
     @Test
     void shouldRejectJoinWhenSessionAlreadyStarted() throws Exception {
-        createSession("WARD-12", "Тестовая смена");
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", "WARD-12")
+        String sessionCode = createSession("Тестовая смена");
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
                         .with(auth()))
                 .andExpect(status().isOk());
 
         var request = Map.of(
                 "displayName", "Анна Петрова",
                 "hospitalPosition", "Главная медсестра",
-                "sessionCode", "WARD-12"
+                "sessionCode", sessionCode
         );
 
         mockMvc.perform(post("/api/player-sessions/join")
@@ -182,12 +186,12 @@ class PlayerSessionControllerIntegrationTest {
 
     @Test
     void shouldReuseExistingParticipantForSamePlayerAndSession() throws Exception {
-        createSession("ENG-01", "Инженерная сессия");
+        String sessionCode = createSession("Инженерная сессия");
 
         var request = Map.of(
                 "displayName", "Иван Сидоров",
                 "hospitalPosition", "Главный инженер",
-                "sessionCode", "eng-01"
+                "sessionCode", sessionCode.toLowerCase()
         );
 
         mockMvc.perform(post("/api/player-sessions/join")
@@ -199,7 +203,7 @@ class PlayerSessionControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.sessionCode").value("ENG-01"));
+                .andExpect(jsonPath("$.sessionCode").value(sessionCode));
 
         assertThat(count("players")).isEqualTo(1);
         assertThat(count("game_sessions")).isEqualTo(1);
@@ -208,8 +212,8 @@ class PlayerSessionControllerIntegrationTest {
 
     @Test
     void shouldSaveSessionStageSettingsAndExposeThemInSessionView() throws Exception {
-        createSession("WARD-12", "Тестовая смена");
-        joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
+        String sessionCode = createSession("Тестовая смена");
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode.toLowerCase());
 
         var request = Map.of(
                 "stages", List.of(
@@ -226,12 +230,12 @@ class PlayerSessionControllerIntegrationTest {
                 )
         );
 
-        mockMvc.perform(put("/api/game-sessions/{sessionCode}/stages", "ward-12")
+        mockMvc.perform(put("/api/game-sessions/{sessionCode}/stages", sessionCode)
                         .with(auth())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.sessionCode").value("WARD-12"))
+                .andExpect(jsonPath("$.sessionCode").value(sessionCode))
                 .andExpect(jsonPath("$.stages.length()").value(2))
                 .andExpect(jsonPath("$.stages[0].interactionMode").value("CHAT_ONLY"))
                 .andExpect(jsonPath("$.stages[1].interactionMode").value("CHAT_AND_KANBAN"));
@@ -241,13 +245,13 @@ class PlayerSessionControllerIntegrationTest {
 
     @Test
     void shouldAssignRandomRolesWithoutMatchingHospitalPositions() throws Exception {
-        createSession("WARD-12", "Тестовая смена");
-        joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
-        joinPlayer("Иван Сидоров", "Главный инженер", "ward-12");
-        joinPlayer("Павел Орлов", "Главный врач", "ward-12");
-        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", "ward-12");
+        String sessionCode = createSession("Тестовая смена");
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode.toLowerCase());
+        joinPlayer("Иван Сидоров", "Главный инженер", sessionCode.toLowerCase());
+        joinPlayer("Павел Орлов", "Главный врач", sessionCode.toLowerCase());
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode.toLowerCase());
 
-        mockMvc.perform(post("/api/game-sessions/{sessionCode}/roles/random", "ward-12")
+        mockMvc.perform(post("/api/game-sessions/{sessionCode}/roles/random", sessionCode)
                         .with(auth()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.participants.length()").value(4));
@@ -257,22 +261,24 @@ class PlayerSessionControllerIntegrationTest {
                 SELECT game_role
                 FROM session_participants sp
                 JOIN game_sessions gs ON gs.id = sp.game_session_id
-                WHERE gs.code = 'WARD-12'
+                WHERE gs.code = ?
                 ORDER BY sp.id
                 """,
-                String.class
+                String.class,
+                sessionCode
         );
 
-        List<Long> conflicts = jdbcTemplate.queryForList(
+        Long conflictCount = jdbcTemplate.queryForObject(
                 """
                 SELECT COUNT(*)
                 FROM session_participants sp
                 JOIN players p ON p.id = sp.player_id
                 JOIN game_sessions gs ON gs.id = sp.game_session_id
-                WHERE gs.code = 'WARD-12'
+                WHERE gs.code = ?
                   AND LOWER(p.hospital_position) = LOWER(sp.game_role)
                 """,
-                Long.class
+                Long.class,
+                sessionCode
         );
 
         assertThat(assignedRoles).contains("Главный врач", "Главная медсестра", "Главный инженер");
@@ -285,26 +291,27 @@ class PlayerSessionControllerIntegrationTest {
                 "Заместитель главного инженера по медтехнике",
                 "Заместитель главного инженера по АХЧ"
         )::contains);
-        assertThat(conflicts.getFirst()).isZero();
+        assertThat(conflictCount).isZero();
     }
 
     @Test
     void shouldAllowManualRoleAssignmentForAnyCustomRole() throws Exception {
-        createSession("WARD-12", "Тестовая смена");
-        joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
+        String sessionCode = createSession("Тестовая смена");
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode.toLowerCase());
         Long participantId = jdbcTemplate.queryForObject(
                 """
                 SELECT sp.id
                 FROM session_participants sp
                 JOIN game_sessions gs ON gs.id = sp.game_session_id
-                WHERE gs.code = 'WARD-12'
+                WHERE gs.code = ?
                 """,
-                Long.class
+                Long.class,
+                sessionCode
         );
 
         var request = Map.of("gameRole", "Координатор снабжения");
 
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/participants/{participantId}/role", "ward-12", participantId)
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/participants/{participantId}/role", sessionCode, participantId)
                         .with(auth())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
@@ -323,14 +330,14 @@ class PlayerSessionControllerIntegrationTest {
 
     @Test
     void shouldReturnSessionParticipantsForFacilitatorView() throws Exception {
-        createSession("WARD-12", "Тестовая смена");
-        joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
-        joinPlayer("Иван Сидоров", "Главный инженер", "WARD-12");
+        String sessionCode = createSession("Тестовая смена");
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode.toLowerCase());
+        joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
 
-        mockMvc.perform(get("/api/game-sessions/{sessionCode}/participants", "ward-12")
+        mockMvc.perform(get("/api/game-sessions/{sessionCode}/participants", sessionCode)
                         .with(auth()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.sessionCode").value("WARD-12"))
+                .andExpect(jsonPath("$.sessionCode").value(sessionCode))
                 .andExpect(jsonPath("$.sessionStatus").value("LOBBY"))
                 .andExpect(jsonPath("$.participants.length()").value(2))
                 .andExpect(jsonPath("$.participants[0].displayName").value("Анна Петрова"))
@@ -341,37 +348,38 @@ class PlayerSessionControllerIntegrationTest {
 
     @Test
     void shouldReturnSessionsOverviewForFacilitatorDashboard() throws Exception {
-        createSession("WARD-12", "Приёмное отделение");
-        createSession("ENG-01", "Инженерный штаб");
-        joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
-        joinPlayer("Иван Сидоров", "Главный инженер", "ward-12");
-        joinPlayer("Павел Орлов", "Главный врач", "eng-01");
+        String firstSessionCode = createSession("Приёмное отделение");
+        String secondSessionCode = createSession("Инженерный штаб");
+        joinPlayer("Анна Петрова", "Главная медсестра", firstSessionCode.toLowerCase());
+        joinPlayer("Иван Сидоров", "Главный инженер", firstSessionCode.toLowerCase());
+        joinPlayer("Павел Орлов", "Главный врач", secondSessionCode.toLowerCase());
 
         mockMvc.perform(get("/api/game-sessions")
                         .with(auth()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(2))
-                .andExpect(jsonPath("$[0].sessionCode").value("ENG-01"))
+                .andExpect(jsonPath("$[0].sessionCode").value(secondSessionCode))
                 .andExpect(jsonPath("$[0].participantCount").value(1))
-                .andExpect(jsonPath("$[1].sessionCode").value("WARD-12"))
+                .andExpect(jsonPath("$[1].sessionCode").value(firstSessionCode))
                 .andExpect(jsonPath("$[1].participantCount").value(2));
     }
 
     @Test
     void shouldStartSessionFromLobby() throws Exception {
-        createSession("WARD-12", "Тестовая смена");
-        joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
+        String sessionCode = createSession("Тестовая смена");
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode.toLowerCase());
 
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", "ward-12")
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
                         .with(auth()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.sessionCode").value("WARD-12"))
+                .andExpect(jsonPath("$.sessionCode").value(sessionCode))
                 .andExpect(jsonPath("$.sessionStatus").value("IN_PROGRESS"))
                 .andExpect(jsonPath("$.participantCount").value(1));
 
         String status = jdbcTemplate.queryForObject(
-                "SELECT status FROM game_sessions WHERE code = 'WARD-12'",
-                String.class
+                "SELECT status FROM game_sessions WHERE code = ?",
+                String.class,
+                sessionCode
         );
 
         assertThat(status).isEqualTo("IN_PROGRESS");
@@ -379,22 +387,23 @@ class PlayerSessionControllerIntegrationTest {
 
     @Test
     void shouldFinishSessionInProgress() throws Exception {
-        createSession("WARD-12", "Тестовая смена");
-        joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", "ward-12")
+        String sessionCode = createSession("Тестовая смена");
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode.toLowerCase());
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
                         .with(auth()))
                 .andExpect(status().isOk());
 
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/finish", "ward-12")
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/finish", sessionCode)
                         .with(auth()))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.sessionCode").value("WARD-12"))
+                .andExpect(jsonPath("$.sessionCode").value(sessionCode))
                 .andExpect(jsonPath("$.sessionStatus").value("FINISHED"))
                 .andExpect(jsonPath("$.participantCount").value(1));
 
         String status = jdbcTemplate.queryForObject(
-                "SELECT status FROM game_sessions WHERE code = 'WARD-12'",
-                String.class
+                "SELECT status FROM game_sessions WHERE code = ?",
+                String.class,
+                sessionCode
         );
 
         assertThat(status).isEqualTo("FINISHED");
@@ -402,21 +411,21 @@ class PlayerSessionControllerIntegrationTest {
 
     @Test
     void shouldDeleteSessionAndExclusivePlayers() throws Exception {
-        createSession("WARD-12", "Приёмное отделение");
-        createSession("ENG-01", "Инженерный штаб");
-        joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
-        joinPlayer("Иван Сидоров", "Главный инженер", "ward-12");
-        joinPlayer("Иван Сидоров", "Главный инженер", "eng-01");
+        String firstSessionCode = createSession("Приёмное отделение");
+        String secondSessionCode = createSession("Инженерный штаб");
+        joinPlayer("Анна Петрова", "Главная медсестра", firstSessionCode.toLowerCase());
+        joinPlayer("Иван Сидоров", "Главный инженер", firstSessionCode.toLowerCase());
+        joinPlayer("Иван Сидоров", "Главный инженер", secondSessionCode.toLowerCase());
 
-        mockMvc.perform(delete("/api/game-sessions/{sessionCode}", "ward-12")
+        mockMvc.perform(delete("/api/game-sessions/{sessionCode}", firstSessionCode)
                         .with(auth()))
                 .andExpect(status().isNoContent());
 
         assertThat(count("game_sessions")).isEqualTo(1);
         assertThat(count("session_participants")).isEqualTo(1);
         assertThat(count("players")).isEqualTo(1);
-        assertThat(countByCode("game_sessions", "ENG-01")).isEqualTo(1);
-        assertThat(countByCode("game_sessions", "WARD-12")).isZero();
+        assertThat(countByCode("game_sessions", secondSessionCode)).isEqualTo(1);
+        assertThat(countByCode("game_sessions", firstSessionCode)).isZero();
     }
 
     @Test
@@ -448,17 +457,16 @@ class PlayerSessionControllerIntegrationTest {
         return httpBasic("facilitator", "medsim123");
     }
 
-    private void createSession(String sessionCode, String sessionName) throws Exception {
-        var request = Map.of(
-                "sessionCode", sessionCode,
-                "sessionName", sessionName
-        );
-
-        mockMvc.perform(post("/api/game-sessions")
+    private String createSession(String sessionName) throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/game-sessions")
                         .with(auth())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk());
+                        .content(objectMapper.writeValueAsString(Map.of("sessionName", sessionName))))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        JsonNode payload = objectMapper.readTree(result.getResponse().getContentAsString());
+        return payload.get("sessionCode").asText();
     }
 
     private void joinPlayer(String displayName, String hospitalPosition, String sessionCode) throws Exception {
