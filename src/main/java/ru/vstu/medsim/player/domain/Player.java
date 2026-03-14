@@ -11,7 +11,13 @@ import jakarta.persistence.Table;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "players")
+@Table(
+        name = "players",
+        uniqueConstraints = @jakarta.persistence.UniqueConstraint(
+                name = "uq_players_display_name_position",
+                columnNames = {"display_name", "hospital_position"}
+        )
+)
 public class Player {
 
     @Id
