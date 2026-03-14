@@ -14,6 +14,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
@@ -149,7 +150,7 @@ class PlayerSessionControllerIntegrationTest {
         joinPlayer("Анна Петрова", "Главная медсестра", "ward-12");
         joinPlayer("Иван Сидоров", "Главный инженер", "ward-12");
         joinPlayer("Павел Орлов", "Главный врач", "ward-12");
-        joinPlayer("Ольга Смирнова", "Медсестра", "ward-12");
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", "ward-12");
 
         mockMvc.perform(post("/api/game-sessions/{sessionCode}/roles/random", "ward-12")
                         .with(auth()))
@@ -180,6 +181,15 @@ class PlayerSessionControllerIntegrationTest {
         );
 
         assertThat(assignedRoles).contains("Главный врач", "Главная медсестра", "Главный инженер");
+        assertThat(assignedRoles).allMatch(Set.of(
+                "Главный врач",
+                "Главная медсестра",
+                "Главный инженер",
+                "Сестра поликлинического отделения",
+                "Сестра диагностического отделения",
+                "Заместитель главного инженера по медтехнике",
+                "Заместитель главного инженера по АХЧ"
+        )::contains);
         assertThat(conflicts.getFirst()).isZero();
     }
 

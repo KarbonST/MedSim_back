@@ -34,7 +34,12 @@ public class GameSessionCommandService {
             "Главная медсестра",
             "Главный инженер"
     );
-    private static final String EXECUTOR_ROLE = "Исполнитель";
+    private static final List<String> EXECUTOR_ROLES = List.of(
+            "Сестра поликлинического отделения",
+            "Сестра диагностического отделения",
+            "Заместитель главного инженера по медтехнике",
+            "Заместитель главного инженера по АХЧ"
+    );
 
     private final GameSessionQueryService gameSessionQueryService;
     private final GameSessionRepository gameSessionRepository;
@@ -111,10 +116,11 @@ public class GameSessionCommandService {
                 .map(assignment -> assignment.participant().getId())
                 .collect(Collectors.toSet());
 
-        shuffledParticipants.stream()
+        List<SessionParticipant> remainingParticipants = shuffledParticipants.stream()
                 .filter(participant -> !leadershipParticipantIds.contains(participant.getId()))
-                .forEach(participant -> participant.assignGameRole(EXECUTOR_ROLE));
+                .toList();
 
+        assignExecutorRoles(remainingParticipants);
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 
@@ -219,6 +225,32 @@ public class GameSessionCommandService {
         }
 
         return false;
+    }
+
+    private void assignExecutorRoles(List<SessionParticipant> participants) {
+        for (int participantIndex = 0; participantIndex < participants.size(); participantIndex++) {
+            SessionParticipant participant = participants.get(participantIndex);
+            participant.assignGameRole(selectExecutorRole(participant, participantIndex));
+        }
+    }
+
+    private String selectExecutorRole(SessionParticipant participant, int offset) {
+        List<String> shuffledRoles = new ArrayList<>(EXECUTOR_ROLES);
+        Collections.shuffle(shuffledRoles, ThreadLocalRandom.current());
+
+        for (int index = 0; index < shuffledRoles.size(); index++) {
+            String role = shuffledRoles.get((offset + index) % shuffledRoles.size());
+            boolean matchesHospitalPosition = participant.getPlayer().getHospitalPosition().equalsIgnoreCase(role);
+
+            if (!matchesHospitalPosition) {
+                return role;
+            }
+        }
+
+        throw new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Невозможно назначить исполнительскую роль без совпадения с реальной должностью."
+        );
     }
 
     private void validateStageSettings(List<GameSessionStageSettingsRequest.StageItem> stages) {
