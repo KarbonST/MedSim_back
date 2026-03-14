@@ -9,9 +9,12 @@ import ru.vstu.medsim.player.domain.GameSession;
 import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.player.repository.GameSessionRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
+import ru.vstu.medsim.session.domain.SessionStageSetting;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
 import ru.vstu.medsim.session.dto.GameSessionSummaryResponse;
+import ru.vstu.medsim.session.dto.SessionStageSettingItem;
+import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
 
 import java.util.List;
 
@@ -20,13 +23,16 @@ public class GameSessionQueryService {
 
     private final GameSessionRepository gameSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
+    private final SessionStageSettingRepository sessionStageSettingRepository;
 
     public GameSessionQueryService(
             GameSessionRepository gameSessionRepository,
-            SessionParticipantRepository sessionParticipantRepository
+            SessionParticipantRepository sessionParticipantRepository,
+            SessionStageSettingRepository sessionStageSettingRepository
     ) {
         this.gameSessionRepository = gameSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
+        this.sessionStageSettingRepository = sessionStageSettingRepository;
     }
 
     @Transactional(readOnly = true)
@@ -47,12 +53,19 @@ public class GameSessionQueryService {
                 .map(this::toParticipantItem)
                 .toList();
 
+        List<SessionStageSettingItem> stages = sessionStageSettingRepository
+                .findAllByGameSessionIdOrderByStageNumberAsc(session.getId())
+                .stream()
+                .map(this::toStageItem)
+                .toList();
+
         return new GameSessionParticipantsResponse(
                 session.getId(),
                 session.getCode(),
                 session.getName(),
                 session.getStatus().name(),
-                participants
+                participants,
+                stages
         );
     }
 
@@ -69,7 +82,8 @@ public class GameSessionQueryService {
                 session.getCode(),
                 session.getName(),
                 session.getStatus().name(),
-                sessionParticipantRepository.countByGameSessionId(session.getId())
+                sessionParticipantRepository.countByGameSessionId(session.getId()),
+                sessionStageSettingRepository.countByGameSessionId(session.getId())
         );
     }
 
@@ -81,6 +95,14 @@ public class GameSessionQueryService {
                 participant.getPlayer().getHospitalPosition(),
                 participant.getGameRole(),
                 participant.getJoinedAt()
+        );
+    }
+
+    private SessionStageSettingItem toStageItem(SessionStageSetting stageSetting) {
+        return new SessionStageSettingItem(
+                stageSetting.getStageNumber(),
+                stageSetting.getDurationMinutes(),
+                stageSetting.getInteractionMode().name()
         );
     }
 

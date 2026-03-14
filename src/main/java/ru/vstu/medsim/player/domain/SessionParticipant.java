@@ -53,6 +53,10 @@ public class SessionParticipant {
         }
     }
 
+    public void assignGameRole(String gameRole) {
+        this.gameRole = gameRole;
+    }
+
     public Long getId() {
         return id;
     }

@@ -7,6 +7,7 @@ public record GameSessionParticipantsResponse(
         String sessionCode,
         String sessionName,
         String sessionStatus,
-        List<GameSessionParticipantItem> participants
+        List<GameSessionParticipantItem> participants,
+        List<SessionStageSettingItem> stages
 ) {
 }

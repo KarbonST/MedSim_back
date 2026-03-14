@@ -5,34 +5,132 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import ru.vstu.medsim.player.domain.GameSession;
+import ru.vstu.medsim.player.domain.GameSessionStatus;
 import ru.vstu.medsim.player.domain.Player;
 import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.player.repository.GameSessionRepository;
 import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
+import ru.vstu.medsim.session.domain.SessionStageSetting;
+import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
+import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
+import ru.vstu.medsim.session.dto.GameSessionRoleAssignmentRequest;
+import ru.vstu.medsim.session.dto.GameSessionStageSettingsRequest;
 import ru.vstu.medsim.session.dto.GameSessionSummaryResponse;
+import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
 @Service
 public class GameSessionCommandService {
+
+    private static final List<String> MANDATORY_LEADERSHIP_ROLES = List.of(
+            "Главный врач",
+            "Главная медсестра",
+            "Главный инженер"
+    );
+    private static final String EXECUTOR_ROLE = "Исполнитель";
 
     private final GameSessionQueryService gameSessionQueryService;
     private final GameSessionRepository gameSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
     private final PlayerRepository playerRepository;
+    private final SessionStageSettingRepository sessionStageSettingRepository;
 
     public GameSessionCommandService(
             GameSessionQueryService gameSessionQueryService,
             GameSessionRepository gameSessionRepository,
             SessionParticipantRepository sessionParticipantRepository,
-            PlayerRepository playerRepository
+            PlayerRepository playerRepository,
+            SessionStageSettingRepository sessionStageSettingRepository
     ) {
         this.gameSessionQueryService = gameSessionQueryService;
         this.gameSessionRepository = gameSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.playerRepository = playerRepository;
+        this.sessionStageSettingRepository = sessionStageSettingRepository;
+    }
+
+    @Transactional
+    public GameSessionParticipantsResponse saveStageSettings(
+            String sessionCode,
+            GameSessionStageSettingsRequest request
+    ) {
+        GameSession session = getLobbySessionOrThrow(sessionCode);
+        validateStageSettings(request.stages());
+
+        sessionStageSettingRepository.deleteAllByGameSessionId(session.getId());
+
+        List<SessionStageSetting> stageSettings = request.stages().stream()
+                .map(stage -> new SessionStageSetting(
+                        session,
+                        stage.stageNumber(),
+                        stage.durationMinutes(),
+                        stage.interactionMode()
+                ))
+                .toList();
+
+        sessionStageSettingRepository.saveAll(stageSettings);
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
+    public GameSessionParticipantsResponse assignRandomRoles(String sessionCode) {
+        GameSession session = getLobbySessionOrThrow(sessionCode);
+        List<SessionParticipant> participants = sessionParticipantRepository
+                .findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId());
+
+        if (participants.size() < MANDATORY_LEADERSHIP_ROLES.size()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Для автоматического распределения ролей нужно минимум 3 участника."
+            );
+        }
+
+        List<SessionParticipant> shuffledParticipants = new ArrayList<>(participants);
+        Collections.shuffle(shuffledParticipants, ThreadLocalRandom.current());
+        List<Assignment> assignments = new ArrayList<>();
+
+        if (!assignLeadershipRoles(shuffledParticipants, 0, assignments)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Невозможно выполнить распределение без совпадения должностей и ролей."
+            );
+        }
+
+        for (Assignment assignment : assignments) {
+            assignment.participant().assignGameRole(assignment.role());
+        }
+
+        Set<Long> leadershipParticipantIds = assignments.stream()
+                .map(assignment -> assignment.participant().getId())
+                .collect(Collectors.toSet());
+
+        shuffledParticipants.stream()
+                .filter(participant -> !leadershipParticipantIds.contains(participant.getId()))
+                .forEach(participant -> participant.assignGameRole(EXECUTOR_ROLE));
+
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
+    public GameSessionParticipantItem assignManualRole(
+            String sessionCode,
+            Long participantId,
+            GameSessionRoleAssignmentRequest request
+    ) {
+        GameSession session = getLobbySessionOrThrow(sessionCode);
+        SessionParticipant participant = sessionParticipantRepository
+                .findByIdAndGameSessionId(participantId, session.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Участник не найден."));
+
+        participant.assignGameRole(request.gameRole().trim());
+        return toParticipantItem(participant);
     }
 
     @Transactional
@@ -71,8 +169,9 @@ public class GameSessionCommandService {
 
         Set<Long> playerIds = participants.stream()
                 .map(participant -> participant.getPlayer().getId())
-                .collect(java.util.stream.Collectors.toSet());
+                .collect(Collectors.toSet());
 
+        sessionStageSettingRepository.deleteAllByGameSessionId(session.getId());
         sessionParticipantRepository.deleteAllByGameSessionId(session.getId());
         gameSessionRepository.delete(session);
 
@@ -90,13 +189,90 @@ public class GameSessionCommandService {
         }
     }
 
+    private boolean assignLeadershipRoles(
+            List<SessionParticipant> participants,
+            int roleIndex,
+            List<Assignment> assignments
+    ) {
+        if (roleIndex >= MANDATORY_LEADERSHIP_ROLES.size()) {
+            return true;
+        }
+
+        String role = MANDATORY_LEADERSHIP_ROLES.get(roleIndex);
+        List<SessionParticipant> shuffledParticipants = new ArrayList<>(participants);
+        Collections.shuffle(shuffledParticipants, ThreadLocalRandom.current());
+
+        for (SessionParticipant participant : shuffledParticipants) {
+            boolean alreadyAssigned = assignments.stream()
+                    .anyMatch(assignment -> assignment.participant().getId().equals(participant.getId()));
+            boolean matchesHospitalPosition = participant.getPlayer().getHospitalPosition().equalsIgnoreCase(role);
+
+            if (alreadyAssigned || matchesHospitalPosition) {
+                continue;
+            }
+
+            assignments.add(new Assignment(participant, role));
+            if (assignLeadershipRoles(participants, roleIndex + 1, assignments)) {
+                return true;
+            }
+            assignments.removeLast();
+        }
+
+        return false;
+    }
+
+    private void validateStageSettings(List<GameSessionStageSettingsRequest.StageItem> stages) {
+        List<Integer> stageNumbers = stages.stream()
+                .map(GameSessionStageSettingsRequest.StageItem::stageNumber)
+                .sorted()
+                .toList();
+
+        for (int index = 0; index < stageNumbers.size(); index++) {
+            int expectedStageNumber = index + 1;
+            if (stageNumbers.get(index) != expectedStageNumber) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Этапы должны идти подряд, начиная с 1."
+                );
+            }
+        }
+    }
+
+    private GameSession getLobbySessionOrThrow(String sessionCode) {
+        GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+
+        if (session.getStatus() != GameSessionStatus.LOBBY) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Настройки этапов и ролей можно менять только до старта игры."
+            );
+        }
+
+        return session;
+    }
+
+    private GameSessionParticipantItem toParticipantItem(SessionParticipant participant) {
+        return new GameSessionParticipantItem(
+                participant.getId(),
+                participant.getPlayer().getId(),
+                participant.getPlayer().getDisplayName(),
+                participant.getPlayer().getHospitalPosition(),
+                participant.getGameRole(),
+                participant.getJoinedAt()
+        );
+    }
+
     private GameSessionSummaryResponse toSummary(GameSession session) {
         return new GameSessionSummaryResponse(
                 session.getId(),
                 session.getCode(),
                 session.getName(),
                 session.getStatus().name(),
-                sessionParticipantRepository.countByGameSessionId(session.getId())
+                sessionParticipantRepository.countByGameSessionId(session.getId()),
+                sessionStageSettingRepository.countByGameSessionId(session.getId())
         );
+    }
+
+    private record Assignment(SessionParticipant participant, String role) {
     }
 }
