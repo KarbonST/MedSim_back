@@ -304,6 +304,20 @@ public class GameSessionCommandService {
     }
 
     @Transactional
+    public GameSessionSummaryResponse pauseSession(String sessionCode) {
+        GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+
+        try {
+            session.pause();
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage(), exception);
+        }
+
+        GameSession savedSession = gameSessionRepository.save(session);
+        return toSummary(savedSession);
+    }
+
+    @Transactional
     public GameSessionSummaryResponse finishSession(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
 

@@ -676,7 +676,7 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
-    void shouldStartAndFinishSession() throws Exception {
+    void shouldStartPauseResumeAndFinishSession() throws Exception {
         String sessionCode = createSession("Тестовая смена", 2);
         joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
         joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
@@ -703,6 +703,16 @@ class PlayerSessionControllerIntegrationTest {
         assignManualRole(sessionCode, participantIdByName(sessionCode, "Сергей Андреев"), "Главный инженер");
 
         saveDefaultStages(sessionCode);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("IN_PROGRESS"));
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/pause", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("PAUSED"));
 
         mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
                         .with(auth()))

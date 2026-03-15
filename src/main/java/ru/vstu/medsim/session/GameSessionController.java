@@ -111,6 +111,11 @@ public class GameSessionController {
         return gameSessionCommandService.startSession(sessionCode);
     }
 
+    @PatchMapping("/{sessionCode}/pause")
+    public GameSessionSummaryResponse pauseSession(@PathVariable String sessionCode) {
+        return gameSessionCommandService.pauseSession(sessionCode);
+    }
+
     @PatchMapping("/{sessionCode}/finish")
     public GameSessionSummaryResponse finishSession(@PathVariable String sessionCode) {
         return gameSessionCommandService.finishSession(sessionCode);

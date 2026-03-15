@@ -60,6 +60,10 @@ public class GameSession {
             throw new IllegalStateException("Нельзя запустить завершённую сессию.");
         }
 
+        if (status == GameSessionStatus.IN_PROGRESS) {
+            throw new IllegalStateException("Сессия уже запущена.");
+        }
+
         status = GameSessionStatus.IN_PROGRESS;
 
         if (startedAt == null) {
@@ -67,7 +71,27 @@ public class GameSession {
         }
     }
 
+    public void pause() {
+        if (status == GameSessionStatus.LOBBY) {
+            throw new IllegalStateException("Нельзя поставить на паузу ещё не начатую сессию.");
+        }
+
+        if (status == GameSessionStatus.PAUSED) {
+            throw new IllegalStateException("Сессия уже находится на паузе.");
+        }
+
+        if (status == GameSessionStatus.FINISHED) {
+            throw new IllegalStateException("Нельзя поставить на паузу завершённую сессию.");
+        }
+
+        status = GameSessionStatus.PAUSED;
+    }
+
     public void finish() {
+        if (status == GameSessionStatus.LOBBY) {
+            throw new IllegalStateException("Нельзя завершить ещё не начатую сессию.");
+        }
+
         if (status == GameSessionStatus.FINISHED) {
             throw new IllegalStateException("Сессия уже завершена.");
         }
