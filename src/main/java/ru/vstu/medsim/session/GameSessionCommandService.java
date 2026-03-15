@@ -280,6 +280,19 @@ public class GameSessionCommandService {
     public GameSessionSummaryResponse startSession(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
 
+        if (!sessionStageSettingRepository.existsByGameSessionId(session.getId())) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Перед стартом игры настройте и сохраните хотя бы один этап сессии."
+            );
+        }
+
+        List<SessionParticipant> participants = sessionParticipantRepository
+                .findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId());
+        List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId());
+
+        validateSessionReadyForStart(participants, teams);
+
         try {
             session.start();
         } catch (IllegalStateException exception) {
@@ -336,6 +349,40 @@ public class GameSessionCommandService {
     private void clearRolesForParticipants(List<SessionParticipant> participants) {
         participants.forEach(SessionParticipant::clearGameRole);
     }
+
+    private void validateSessionReadyForStart(List<SessionParticipant> participants, List<SessionTeam> teams) {
+        long unassignedParticipantsCount = participants.stream()
+                .filter(participant -> participant.getTeam() == null)
+                .count();
+
+        if (unassignedParticipantsCount > 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Перед стартом игры распределите по командам всех подключившихся участников."
+            );
+        }
+
+        for (SessionTeam team : teams) {
+            List<String> teamRoles = participants.stream()
+                    .filter(participant -> participant.getTeam() != null && participant.getTeam().getId().equals(team.getId()))
+                    .map(SessionParticipant::getGameRole)
+                    .filter(role -> role != null && !role.isBlank())
+                    .toList();
+
+            List<String> missingLeadershipRoles = MANDATORY_LEADERSHIP_ROLES.stream()
+                    .filter(role -> teamRoles.stream().noneMatch(role::equalsIgnoreCase))
+                    .toList();
+
+            if (!missingLeadershipRoles.isEmpty()) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Перед стартом игры в команде '%s' должны быть назначены все руководящие роли: %s."
+                                .formatted(team.getName(), String.join(", ", missingLeadershipRoles))
+                );
+            }
+        }
+    }
+
 
     private void validateTeamRoleAssignment(SessionTeam team, List<SessionParticipant> teamParticipants) {
         if (teamParticipants.size() < MANDATORY_LEADERSHIP_ROLES.size()) {

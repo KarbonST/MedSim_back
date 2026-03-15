@@ -116,9 +116,7 @@ class PlayerSessionControllerIntegrationTest {
         String lobbySessionCode = createSession("Приёмное отделение", 2);
         String startedSessionCode = createSession("Инженерный штаб", 2);
 
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", startedSessionCode)
-                        .with(auth()))
-                .andExpect(status().isOk());
+        prepareStartedTwoTeamSession(startedSessionCode);
 
         mockMvc.perform(get("/api/player-sessions/available"))
                 .andExpect(status().isOk())
@@ -165,9 +163,7 @@ class PlayerSessionControllerIntegrationTest {
     @Test
     void shouldRejectJoinWhenSessionAlreadyStarted() throws Exception {
         String sessionCode = createSession("Тестовая смена", 2);
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
-                        .with(auth()))
-                .andExpect(status().isOk());
+        prepareStartedTwoTeamSession(sessionCode);
 
         var request = Map.of(
                 "displayName", "Анна Петрова",
@@ -189,6 +185,8 @@ class PlayerSessionControllerIntegrationTest {
         joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
         joinPlayer("Павел Орлов", "Главный врач", sessionCode);
         joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode);
+        joinPlayer("Елена Миронова", "Сестра диагностического отделения", sessionCode);
+        joinPlayer("Сергей Андреев", "Заместитель главного инженера по медтехнике", sessionCode);
 
         Long firstTeamId = firstTeamId(sessionCode);
         Long secondTeamId = teamIdBySortOrder(sessionCode, 2);
@@ -197,23 +195,24 @@ class PlayerSessionControllerIntegrationTest {
         Long ivanId = participantIdByName(sessionCode, "Иван Сидоров");
         Long pavelId = participantIdByName(sessionCode, "Павел Орлов");
         Long olgaId = participantIdByName(sessionCode, "Ольга Смирнова");
+        Long elenaId = participantIdByName(sessionCode, "Елена Миронова");
+        Long sergeyId = participantIdByName(sessionCode, "Сергей Андреев");
 
         assignParticipantToTeam(sessionCode, annaId, firstTeamId);
         assignParticipantToTeam(sessionCode, ivanId, firstTeamId);
-        assignParticipantToTeam(sessionCode, pavelId, secondTeamId);
+        assignParticipantToTeam(sessionCode, pavelId, firstTeamId);
         assignParticipantToTeam(sessionCode, olgaId, secondTeamId);
+        assignParticipantToTeam(sessionCode, elenaId, secondTeamId);
+        assignParticipantToTeam(sessionCode, sergeyId, secondTeamId);
 
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/participants/{participantId}/role", sessionCode, annaId)
-                        .with(auth())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of("gameRole", "Главный врач"))))
-                .andExpect(status().isOk());
+        assignManualRole(sessionCode, annaId, "Главный врач");
+        assignManualRole(sessionCode, ivanId, "Главная медсестра");
+        assignManualRole(sessionCode, pavelId, "Главный инженер");
+        assignManualRole(sessionCode, olgaId, "Главный врач");
+        assignManualRole(sessionCode, elenaId, "Главная медсестра");
+        assignManualRole(sessionCode, sergeyId, "Главный инженер");
 
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/participants/{participantId}/role", sessionCode, ivanId)
-                        .with(auth())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of("gameRole", "Главная медсестра"))))
-                .andExpect(status().isOk());
+        saveDefaultStages(sessionCode);
 
         mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
                         .with(auth()))
@@ -223,9 +222,10 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionStatus").value("IN_PROGRESS"))
                 .andExpect(jsonPath("$.teamId").value(firstTeamId))
-                .andExpect(jsonPath("$.teammates.length()").value(2))
+                .andExpect(jsonPath("$.teammates.length()").value(3))
                 .andExpect(jsonPath("$.teammates[0].displayName").value("Анна Петрова"))
-                .andExpect(jsonPath("$.teammates[1].displayName").value("Иван Сидоров"));
+                .andExpect(jsonPath("$.teammates[1].displayName").value("Иван Сидоров"))
+                .andExpect(jsonPath("$.teammates[2].displayName").value("Павел Орлов"));
     }
 
     @Test
@@ -612,9 +612,97 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
+    void shouldRejectSessionStartWithoutSavedStages() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void shouldRejectSessionStartWhenSomeParticipantsHaveNoTeam() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
+        joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
+        joinPlayer("Павел Орлов", "Главный врач", sessionCode);
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode);
+        joinPlayer("Елена Миронова", "Сестра диагностического отделения", sessionCode);
+        joinPlayer("Сергей Андреев", "Заместитель главного инженера по медтехнике", sessionCode);
+
+        Long firstTeamId = teamIdBySortOrder(sessionCode, 1);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), firstTeamId);
+
+        saveDefaultStages(sessionCode);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
+    void shouldRejectSessionStartWhenLeadershipRolesAreMissing() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
+        joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
+        joinPlayer("Павел Орлов", "Главный врач", sessionCode);
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode);
+        joinPlayer("Елена Миронова", "Сестра диагностического отделения", sessionCode);
+        joinPlayer("Сергей Андреев", "Заместитель главного инженера по медтехнике", sessionCode);
+
+        Long firstTeamId = teamIdBySortOrder(sessionCode, 1);
+        Long secondTeamId = teamIdBySortOrder(sessionCode, 2);
+
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Ольга Смирнова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Елена Миронова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Сергей Андреев"), secondTeamId);
+
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), "Главный врач");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), "Главная медсестра");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), "Главный инженер");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Ольга Смирнова"), "Главный врач");
+
+        saveDefaultStages(sessionCode);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
     void shouldStartAndFinishSession() throws Exception {
         String sessionCode = createSession("Тестовая смена", 2);
         joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
+        joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
+        joinPlayer("Павел Орлов", "Главный врач", sessionCode);
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode);
+        joinPlayer("Елена Миронова", "Сестра диагностического отделения", sessionCode);
+        joinPlayer("Сергей Андреев", "Заместитель главного инженера по медтехнике", sessionCode);
+
+        Long firstTeamId = teamIdBySortOrder(sessionCode, 1);
+        Long secondTeamId = teamIdBySortOrder(sessionCode, 2);
+
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Ольга Смирнова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Елена Миронова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Сергей Андреев"), secondTeamId);
+
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), "Главный врач");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), "Главная медсестра");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), "Главный инженер");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Ольга Смирнова"), "Главный врач");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Елена Миронова"), "Главная медсестра");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Сергей Андреев"), "Главный инженер");
+
+        saveDefaultStages(sessionCode);
 
         mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
                         .with(auth()))
@@ -657,6 +745,67 @@ class PlayerSessionControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isBadRequest());
+    }
+
+
+
+    private void prepareStartedTwoTeamSession(String sessionCode) throws Exception {
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
+        joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
+        joinPlayer("Павел Орлов", "Главный врач", sessionCode);
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode);
+        joinPlayer("Елена Миронова", "Сестра диагностического отделения", sessionCode);
+        joinPlayer("Сергей Андреев", "Заместитель главного инженера по медтехнике", sessionCode);
+
+        Long firstTeamId = teamIdBySortOrder(sessionCode, 1);
+        Long secondTeamId = teamIdBySortOrder(sessionCode, 2);
+
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), firstTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Ольга Смирнова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Елена Миронова"), secondTeamId);
+        assignParticipantToTeam(sessionCode, participantIdByName(sessionCode, "Сергей Андреев"), secondTeamId);
+
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Анна Петрова"), "Главный врач");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Иван Сидоров"), "Главная медсестра");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Павел Орлов"), "Главный инженер");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Ольга Смирнова"), "Главный врач");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Елена Миронова"), "Главная медсестра");
+        assignManualRole(sessionCode, participantIdByName(sessionCode, "Сергей Андреев"), "Главный инженер");
+
+        saveDefaultStages(sessionCode);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk());
+    }
+
+    private void saveDefaultStages(String sessionCode) throws Exception {
+        var request = Map.of(
+                "stages", List.of(
+                        Map.of(
+                                "stageNumber", 1,
+                                "durationMinutes", 12,
+                                "interactionMode", "CHAT_ONLY"
+                        )
+                )
+        );
+
+        mockMvc.perform(put("/api/game-sessions/{sessionCode}/stages", sessionCode)
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
+    }
+
+
+    private void assignManualRole(String sessionCode, Long participantId, String gameRole) throws Exception {
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/participants/{participantId}/role", sessionCode, participantId)
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("gameRole", gameRole))))
+                .andExpect(status().isOk());
     }
 
     private RequestPostProcessor auth() {

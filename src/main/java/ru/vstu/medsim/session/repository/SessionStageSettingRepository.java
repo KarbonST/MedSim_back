@@ -11,5 +11,7 @@ public interface SessionStageSettingRepository extends JpaRepository<SessionStag
 
     long countByGameSessionId(Long gameSessionId);
 
+    boolean existsByGameSessionId(Long gameSessionId);
+
     void deleteAllByGameSessionId(Long gameSessionId);
 }
