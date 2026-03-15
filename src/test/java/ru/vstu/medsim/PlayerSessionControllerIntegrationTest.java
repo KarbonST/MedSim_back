@@ -2,6 +2,7 @@ package ru.vstu.medsim;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import ru.vstu.medsim.chat.TeamChatService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +43,9 @@ class PlayerSessionControllerIntegrationTest {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private TeamChatService teamChatService;
 
     @BeforeEach
     void clearDatabase() {
@@ -788,6 +792,63 @@ class PlayerSessionControllerIntegrationTest {
                         .with(auth()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionStatus").value("FINISHED"));
+    }
+
+    @Test
+    void shouldReturnOnlyOwnTeamChatForPlayer() throws Exception {
+        String sessionCode = createSession("Чатовая смена", 2);
+        prepareStartedTwoTeamSession(sessionCode);
+
+        Long annaId = participantIdByName(sessionCode, "Анна Петрова");
+        Long olgaId = participantIdByName(sessionCode, "Ольга Смирнова");
+
+        teamChatService.postPlayerMessage(sessionCode, annaId, "Сообщение первой команды");
+        teamChatService.postPlayerMessage(sessionCode, olgaId, "Сообщение второй команды");
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/chat", sessionCode, annaId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamId").value(firstTeamId(sessionCode)))
+                .andExpect(jsonPath("$.messages.length()").value(1))
+                .andExpect(jsonPath("$.messages[0].authorName").value("Анна Петрова"))
+                .andExpect(jsonPath("$.messages[0].messageText").value("Сообщение первой команды"));
+    }
+
+    @Test
+    void shouldReturnBothTeamChatsForFacilitator() throws Exception {
+        String sessionCode = createSession("Чатовая смена", 2);
+        prepareStartedTwoTeamSession(sessionCode);
+
+        Long annaId = participantIdByName(sessionCode, "Анна Петрова");
+        Long olgaId = participantIdByName(sessionCode, "Ольга Смирнова");
+
+        teamChatService.postPlayerMessage(sessionCode, annaId, "Первая команда на связи");
+        teamChatService.postPlayerMessage(sessionCode, olgaId, "Вторая команда на связи");
+
+        mockMvc.perform(get("/api/game-sessions/{sessionCode}/team-chats", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamChats.length()").value(2))
+                .andExpect(jsonPath("$.teamChats[0].messages.length()").value(1))
+                .andExpect(jsonPath("$.teamChats[0].messages[0].messageText").value("Первая команда на связи"))
+                .andExpect(jsonPath("$.teamChats[1].messages.length()").value(1))
+                .andExpect(jsonPath("$.teamChats[1].messages[0].messageText").value("Вторая команда на связи"));
+    }
+
+    @Test
+    void shouldPersistPlayerChatMessageInDatabase() throws Exception {
+        String sessionCode = createSession("Чатовая смена", 2);
+        prepareStartedTwoTeamSession(sessionCode);
+        Long annaId = participantIdByName(sessionCode, "Анна Петрова");
+
+        teamChatService.postPlayerMessage(sessionCode, annaId, "Привет, команда");
+
+        Integer messageCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM team_chat_messages tcm JOIN game_sessions gs ON gs.id = tcm.game_session_id WHERE gs.code = ?",
+                Integer.class,
+                sessionCode
+        );
+
+        assertThat(messageCount).isEqualTo(1);
     }
 
     @Test

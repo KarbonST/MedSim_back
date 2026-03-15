@@ -106,7 +106,7 @@ public class GameSessionQueryService {
         );
     }
 
-    GameSession getSessionOrThrow(String sessionCode) {
+    public GameSession getSessionOrThrow(String sessionCode) {
         String normalizedCode = normalizeCode(sessionCode);
 
         return gameSessionRepository.findByCode(normalizedCode)
