@@ -70,18 +70,29 @@ public class PlayerSessionService {
                         "Сессия с таким кодом не найдена. Выберите существующую сессию."
                 ));
 
-        if (session.getStatus() != GameSessionStatus.LOBBY) {
+        Player player = playerRepository.findByDisplayNameIgnoreCaseAndHospitalPositionIgnoreCase(displayName, hospitalPosition)
+                .orElse(null);
+
+        SessionParticipant participant = player == null
+                ? null
+                : sessionParticipantRepository.findByGameSessionIdAndPlayerId(session.getId(), player.getId()).orElse(null);
+
+        boolean returningParticipant = participant != null;
+
+        if (!returningParticipant && session.getStatus() != GameSessionStatus.LOBBY) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Подключение возможно только к сессии в статусе ожидания."
+                    "К уже начатой сессии можно вернуться только под теми же именем и должностью, с которыми вы входили раньше."
             );
         }
 
-        Player player = playerRepository.findByDisplayNameIgnoreCaseAndHospitalPositionIgnoreCase(displayName, hospitalPosition)
-                .orElseGet(() -> playerRepository.save(new Player(displayName, hospitalPosition)));
+        if (player == null) {
+            player = playerRepository.save(new Player(displayName, hospitalPosition));
+        }
 
-        SessionParticipant participant = sessionParticipantRepository.findByGameSessionIdAndPlayerId(session.getId(), player.getId())
-                .orElseGet(() -> sessionParticipantRepository.save(new SessionParticipant(session, player)));
+        if (participant == null) {
+            participant = sessionParticipantRepository.save(new SessionParticipant(session, player));
+        }
 
         return new PlayerSessionJoinResponse(
                 participant.getId(),

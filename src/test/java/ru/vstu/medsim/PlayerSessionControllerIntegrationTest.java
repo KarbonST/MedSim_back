@@ -165,13 +165,32 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
-    void shouldRejectJoinWhenSessionAlreadyStarted() throws Exception {
+    void shouldAllowExistingParticipantToRejoinStartedSession() throws Exception {
         String sessionCode = createSession("Тестовая смена", 2);
         prepareStartedTwoTeamSession(sessionCode);
 
         var request = Map.of(
                 "displayName", "Анна Петрова",
                 "hospitalPosition", "Главная медсестра",
+                "sessionCode", sessionCode
+        );
+
+        mockMvc.perform(post("/api/player-sessions/join")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("IN_PROGRESS"))
+                .andExpect(jsonPath("$.displayName").value("Анна Петрова"));
+    }
+
+    @Test
+    void shouldRejectJoinWhenNewParticipantTargetsStartedSession() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+        prepareStartedTwoTeamSession(sessionCode);
+
+        var request = Map.of(
+                "displayName", "Новый Участник",
+                "hospitalPosition", "Другая должность",
                 "sessionCode", sessionCode
         );
 
