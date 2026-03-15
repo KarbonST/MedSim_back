@@ -1,5 +1,6 @@
 package ru.vstu.medsim.player.dto;
 
+import ru.vstu.medsim.session.dto.SessionRuntimeItem;
 import ru.vstu.medsim.session.dto.SessionStageSettingItem;
 
 import java.util.List;
@@ -17,6 +18,7 @@ public record PlayerTeamWorkspaceResponse(
         Long teamId,
         String teamName,
         List<PlayerTeamWorkspaceMemberResponse> teammates,
-        List<SessionStageSettingItem> stages
+        List<SessionStageSettingItem> stages,
+        SessionRuntimeItem sessionRuntime
 ) {
 }

@@ -10,6 +10,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 
 @Entity
@@ -39,6 +40,19 @@ public class GameSession {
     @Column(name = "finished_at")
     private LocalDateTime finishedAt;
 
+    @Column(name = "active_stage_number")
+    private Integer activeStageNumber;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "timer_status", nullable = false, length = 30)
+    private SessionTimerStatus timerStatus;
+
+    @Column(name = "timer_remaining_seconds")
+    private Integer timerRemainingSeconds;
+
+    @Column(name = "timer_updated_at")
+    private LocalDateTime timerUpdatedAt;
+
     protected GameSession() {
     }
 
@@ -46,12 +60,17 @@ public class GameSession {
         this.code = code;
         this.name = name;
         this.status = status;
+        this.timerStatus = SessionTimerStatus.STOPPED;
     }
 
     @PrePersist
     void prePersist() {
         if (createdAt == null) {
             createdAt = LocalDateTime.now();
+        }
+
+        if (timerStatus == null) {
+            timerStatus = SessionTimerStatus.STOPPED;
         }
     }
 
@@ -84,6 +103,10 @@ public class GameSession {
             throw new IllegalStateException("Нельзя поставить на паузу завершённую сессию.");
         }
 
+        if (timerStatus == SessionTimerStatus.RUNNING) {
+            pauseTimer();
+        }
+
         status = GameSessionStatus.PAUSED;
     }
 
@@ -96,8 +119,91 @@ public class GameSession {
             throw new IllegalStateException("Сессия уже завершена.");
         }
 
+        if (timerStatus == SessionTimerStatus.RUNNING) {
+            timerRemainingSeconds = getRemainingSecondsAt(LocalDateTime.now());
+        }
+
+        timerStatus = SessionTimerStatus.STOPPED;
+        timerUpdatedAt = null;
         status = GameSessionStatus.FINISHED;
         finishedAt = LocalDateTime.now();
+    }
+
+    public void initializeStageRuntime(int stageNumber, int durationMinutes) {
+        activeStageNumber = stageNumber;
+        timerRemainingSeconds = durationMinutes * 60;
+        timerStatus = SessionTimerStatus.STOPPED;
+        timerUpdatedAt = null;
+    }
+
+    public void selectStage(int stageNumber, int durationMinutes) {
+        if (status == GameSessionStatus.FINISHED) {
+            throw new IllegalStateException("Нельзя менять этап в завершённой сессии.");
+        }
+
+        initializeStageRuntime(stageNumber, durationMinutes);
+    }
+
+    public void startTimer() {
+        if (status == GameSessionStatus.FINISHED) {
+            throw new IllegalStateException("Нельзя запускать таймер в завершённой сессии.");
+        }
+
+        if (activeStageNumber == null || timerRemainingSeconds == null) {
+            throw new IllegalStateException("Сначала выберите этап с сохранённой длительностью.");
+        }
+
+        if (timerRemainingSeconds <= 0) {
+            throw new IllegalStateException("Для запуска таймера сначала сбросьте время текущего этапа.");
+        }
+
+        if (timerStatus == SessionTimerStatus.RUNNING) {
+            throw new IllegalStateException("Таймер текущего этапа уже запущен.");
+        }
+
+        timerStatus = SessionTimerStatus.RUNNING;
+        timerUpdatedAt = LocalDateTime.now();
+    }
+
+    public void pauseTimer() {
+        if (timerStatus != SessionTimerStatus.RUNNING) {
+            throw new IllegalStateException("Таймер сейчас не запущен.");
+        }
+
+        timerRemainingSeconds = getRemainingSecondsAt(LocalDateTime.now());
+        timerStatus = SessionTimerStatus.PAUSED;
+        timerUpdatedAt = LocalDateTime.now();
+    }
+
+    public void resetTimer(int durationMinutes) {
+        if (activeStageNumber == null) {
+            throw new IllegalStateException("Сначала выберите этап.");
+        }
+
+        timerRemainingSeconds = durationMinutes * 60;
+        timerStatus = SessionTimerStatus.STOPPED;
+        timerUpdatedAt = null;
+    }
+
+    public int getRemainingSecondsAt(LocalDateTime moment) {
+        if (timerRemainingSeconds == null) {
+            return 0;
+        }
+
+        if (timerStatus != SessionTimerStatus.RUNNING || timerUpdatedAt == null) {
+            return Math.max(timerRemainingSeconds, 0);
+        }
+
+        long elapsedSeconds = Math.max(Duration.between(timerUpdatedAt, moment).getSeconds(), 0);
+        return Math.max((int) (timerRemainingSeconds - elapsedSeconds), 0);
+    }
+
+    public LocalDateTime getTimerEndsAt() {
+        if (timerStatus != SessionTimerStatus.RUNNING || timerUpdatedAt == null || timerRemainingSeconds == null) {
+            return null;
+        }
+
+        return timerUpdatedAt.plusSeconds(timerRemainingSeconds);
     }
 
     public Long getId() {
@@ -130,5 +236,21 @@ public class GameSession {
 
     public LocalDateTime getFinishedAt() {
         return finishedAt;
+    }
+
+    public Integer getActiveStageNumber() {
+        return activeStageNumber;
+    }
+
+    public SessionTimerStatus getTimerStatus() {
+        return timerStatus;
+    }
+
+    public Integer getTimerRemainingSeconds() {
+        return timerRemainingSeconds;
+    }
+
+    public LocalDateTime getTimerUpdatedAt() {
+        return timerUpdatedAt;
     }
 }

@@ -16,6 +16,7 @@ import ru.vstu.medsim.player.dto.PlayerTeamWorkspaceResponse;
 import ru.vstu.medsim.player.repository.GameSessionRepository;
 import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
+import ru.vstu.medsim.session.SessionRuntimeSnapshotService;
 import ru.vstu.medsim.session.dto.SessionStageSettingItem;
 import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
 
@@ -28,17 +29,20 @@ public class PlayerSessionService {
     private final GameSessionRepository gameSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
     private final SessionStageSettingRepository sessionStageSettingRepository;
+    private final SessionRuntimeSnapshotService sessionRuntimeSnapshotService;
 
     public PlayerSessionService(
             PlayerRepository playerRepository,
             GameSessionRepository gameSessionRepository,
             SessionParticipantRepository sessionParticipantRepository,
-            SessionStageSettingRepository sessionStageSettingRepository
+            SessionStageSettingRepository sessionStageSettingRepository,
+            SessionRuntimeSnapshotService sessionRuntimeSnapshotService
     ) {
         this.playerRepository = playerRepository;
         this.gameSessionRepository = gameSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.sessionStageSettingRepository = sessionStageSettingRepository;
+        this.sessionRuntimeSnapshotService = sessionRuntimeSnapshotService;
     }
 
     @Transactional(readOnly = true)
@@ -124,9 +128,10 @@ public class PlayerSessionService {
                         ))
                         .toList();
 
-        List<SessionStageSettingItem> stages = sessionStageSettingRepository
-                .findAllByGameSessionIdOrderByStageNumberAsc(session.getId())
-                .stream()
+        List<ru.vstu.medsim.session.domain.SessionStageSetting> stageEntities = sessionStageSettingRepository
+                .findAllByGameSessionIdOrderByStageNumberAsc(session.getId());
+
+        List<SessionStageSettingItem> stages = stageEntities.stream()
                 .map(stage -> new SessionStageSettingItem(
                         stage.getStageNumber(),
                         stage.getDurationMinutes(),
@@ -147,7 +152,8 @@ public class PlayerSessionService {
                 participant.getTeam() != null ? participant.getTeam().getId() : null,
                 participant.getTeam() != null ? participant.getTeam().getName() : null,
                 teammates,
-                stages
+                stages,
+                sessionRuntimeSnapshotService.buildRuntime(session, stageEntities)
         );
     }
 

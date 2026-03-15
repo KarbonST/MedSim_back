@@ -14,6 +14,7 @@ import ru.vstu.medsim.session.domain.SessionTeam;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
 import ru.vstu.medsim.session.dto.GameSessionSummaryResponse;
+import ru.vstu.medsim.session.dto.SessionRuntimeItem;
 import ru.vstu.medsim.session.dto.SessionStageSettingItem;
 import ru.vstu.medsim.session.dto.SessionTeamItem;
 import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
@@ -31,17 +32,20 @@ public class GameSessionQueryService {
     private final SessionParticipantRepository sessionParticipantRepository;
     private final SessionStageSettingRepository sessionStageSettingRepository;
     private final SessionTeamRepository sessionTeamRepository;
+    private final SessionRuntimeSnapshotService sessionRuntimeSnapshotService;
 
     public GameSessionQueryService(
             GameSessionRepository gameSessionRepository,
             SessionParticipantRepository sessionParticipantRepository,
             SessionStageSettingRepository sessionStageSettingRepository,
-            SessionTeamRepository sessionTeamRepository
+            SessionTeamRepository sessionTeamRepository,
+            SessionRuntimeSnapshotService sessionRuntimeSnapshotService
     ) {
         this.gameSessionRepository = gameSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.sessionStageSettingRepository = sessionStageSettingRepository;
         this.sessionTeamRepository = sessionTeamRepository;
+        this.sessionRuntimeSnapshotService = sessionRuntimeSnapshotService;
     }
 
     @Transactional(readOnly = true)
@@ -81,11 +85,14 @@ public class GameSessionQueryService {
                 .map(this::toParticipantItem)
                 .toList();
 
-        List<SessionStageSettingItem> stages = sessionStageSettingRepository
-                .findAllByGameSessionIdOrderByStageNumberAsc(session.getId())
-                .stream()
+        List<SessionStageSetting> stageEntities = sessionStageSettingRepository
+                .findAllByGameSessionIdOrderByStageNumberAsc(session.getId());
+
+        List<SessionStageSettingItem> stages = stageEntities.stream()
                 .map(this::toStageItem)
                 .toList();
+
+        SessionRuntimeItem sessionRuntime = sessionRuntimeSnapshotService.buildRuntime(session, stageEntities);
 
         return new GameSessionParticipantsResponse(
                 session.getId(),
@@ -94,7 +101,8 @@ public class GameSessionQueryService {
                 session.getStatus().name(),
                 teams,
                 participants,
-                stages
+                stages,
+                sessionRuntime
         );
     }
 

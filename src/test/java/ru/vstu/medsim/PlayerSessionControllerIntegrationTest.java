@@ -229,6 +229,71 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
+    void shouldExposeCurrentStageAndTimerStateInPlayerWorkspace() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+        prepareStartedTwoTeamSession(sessionCode);
+        Long annaId = participantIdByName(sessionCode, "Анна Петрова");
+
+        selectCurrentStage(sessionCode, 1);
+
+        MvcResult timerStartResult = mockMvc.perform(patch("/api/game-sessions/{sessionCode}/runtime/timer/start", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionRuntime.activeStageNumber").value(1))
+                .andExpect(jsonPath("$.sessionRuntime.timerStatus").value("RUNNING"))
+                .andReturn();
+
+        JsonNode facilitatorPayload = objectMapper.readTree(timerStartResult.getResponse().getContentAsString());
+        int facilitatorRemainingSeconds = facilitatorPayload.path("sessionRuntime").path("remainingSeconds").asInt();
+        assertThat(facilitatorRemainingSeconds).isBetween(1, 1200);
+        assertThat(facilitatorPayload.path("sessionRuntime").path("timerEndsAt").asText()).isNotBlank();
+
+        MvcResult workspaceResult = mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, annaId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionRuntime.activeStageNumber").value(1))
+                .andExpect(jsonPath("$.sessionRuntime.timerStatus").value("RUNNING"))
+                .andReturn();
+
+        JsonNode workspacePayload = objectMapper.readTree(workspaceResult.getResponse().getContentAsString());
+        int playerRemainingSeconds = workspacePayload.path("sessionRuntime").path("remainingSeconds").asInt();
+        assertThat(playerRemainingSeconds).isBetween(1, 1200);
+        assertThat(workspacePayload.path("sessionRuntime").path("timerEndsAt").asText()).isNotBlank();
+    }
+
+    @Test
+    void shouldPauseSharedStageTimerWhenGameIsPaused() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+        prepareStartedTwoTeamSession(sessionCode);
+
+        MvcResult timerStartResult = mockMvc.perform(patch("/api/game-sessions/{sessionCode}/runtime/timer/start", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        int runningRemainingSeconds = objectMapper
+                .readTree(timerStartResult.getResponse().getContentAsString())
+                .path("sessionRuntime")
+                .path("remainingSeconds")
+                .asInt();
+
+        MvcResult pauseResult = mockMvc.perform(patch("/api/game-sessions/{sessionCode}/pause", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("PAUSED"))
+                .andExpect(jsonPath("$.sessionRuntime.timerStatus").value("PAUSED"))
+                .andReturn();
+
+        int pausedRemainingSeconds = objectMapper
+                .readTree(pauseResult.getResponse().getContentAsString())
+                .path("sessionRuntime")
+                .path("remainingSeconds")
+                .asInt();
+
+        assertThat(pausedRemainingSeconds).isBetween(1, runningRemainingSeconds);
+    }
+
+
+    @Test
     void shouldReuseExistingParticipantForSamePlayerAndSession() throws Exception {
         String sessionCode = createSession("Инженерная сессия", 2);
 
@@ -807,6 +872,17 @@ class PlayerSessionControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk());
+    }
+
+
+    private void selectCurrentStage(String sessionCode, int stageNumber) throws Exception {
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/runtime/stage", sessionCode)
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("stageNumber", stageNumber))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionRuntime.activeStageNumber").value(stageNumber))
+                .andExpect(jsonPath("$.sessionRuntime.timerStatus").value("STOPPED"));
     }
 
 

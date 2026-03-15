@@ -20,6 +20,7 @@ import ru.vstu.medsim.session.dto.GameSessionRenameRequest;
 import ru.vstu.medsim.session.dto.GameSessionRoleAssignmentRequest;
 import ru.vstu.medsim.session.dto.GameSessionStageSettingsRequest;
 import ru.vstu.medsim.session.dto.GameSessionSummaryResponse;
+import ru.vstu.medsim.session.dto.SessionRuntimeStageRequest;
 import ru.vstu.medsim.session.dto.GameSessionTeamAssignmentRequest;
 import ru.vstu.medsim.session.dto.GameSessionTeamRenameRequest;
 import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
@@ -221,6 +222,11 @@ public class GameSessionCommandService {
                 .toList();
 
         sessionStageSettingRepository.saveAll(stageSettings);
+
+        SessionStageSetting firstStage = stageSettings.get(0);
+        session.initializeStageRuntime(firstStage.getStageNumber(), firstStage.getDurationMinutes());
+        gameSessionRepository.save(session);
+
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 
@@ -277,10 +283,69 @@ public class GameSessionCommandService {
     }
 
     @Transactional
-    public GameSessionSummaryResponse startSession(String sessionCode) {
-        GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+    public GameSessionParticipantsResponse selectRuntimeStage(String sessionCode, SessionRuntimeStageRequest request) {
+        GameSession session = getRuntimeEditableSessionOrThrow(sessionCode);
+        SessionStageSetting stage = getStageOrThrow(session, request.stageNumber());
 
-        if (!sessionStageSettingRepository.existsByGameSessionId(session.getId())) {
+        try {
+            session.selectStage(stage.getStageNumber(), stage.getDurationMinutes());
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage(), exception);
+        }
+
+        gameSessionRepository.save(session);
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
+    public GameSessionParticipantsResponse startRuntimeTimer(String sessionCode) {
+        GameSession session = getRuntimeEditableSessionOrThrow(sessionCode);
+
+        try {
+            session.startTimer();
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage(), exception);
+        }
+
+        gameSessionRepository.save(session);
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
+    public GameSessionParticipantsResponse pauseRuntimeTimer(String sessionCode) {
+        GameSession session = getRuntimeEditableSessionOrThrow(sessionCode);
+
+        try {
+            session.pauseTimer();
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage(), exception);
+        }
+
+        gameSessionRepository.save(session);
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
+    public GameSessionParticipantsResponse resetRuntimeTimer(String sessionCode) {
+        GameSession session = getRuntimeEditableSessionOrThrow(sessionCode);
+        SessionStageSetting stage = getActiveStageOrThrow(session);
+
+        try {
+            session.resetTimer(stage.getDurationMinutes());
+        } catch (IllegalStateException exception) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage(), exception);
+        }
+
+        gameSessionRepository.save(session);
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
+    public GameSessionParticipantsResponse startSession(String sessionCode) {
+        GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+        List<SessionStageSetting> stages = sessionStageSettingRepository.findAllByGameSessionIdOrderByStageNumberAsc(session.getId());
+
+        if (stages.isEmpty()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Перед стартом игры настройте и сохраните хотя бы один этап сессии."
@@ -293,18 +358,23 @@ public class GameSessionCommandService {
 
         validateSessionReadyForStart(participants, teams);
 
+        if (session.getActiveStageNumber() == null) {
+            SessionStageSetting firstStage = stages.get(0);
+            session.initializeStageRuntime(firstStage.getStageNumber(), firstStage.getDurationMinutes());
+        }
+
         try {
             session.start();
         } catch (IllegalStateException exception) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage(), exception);
         }
 
-        GameSession savedSession = gameSessionRepository.save(session);
-        return toSummary(savedSession);
+        gameSessionRepository.save(session);
+        return gameSessionQueryService.getParticipants(sessionCode);
     }
 
     @Transactional
-    public GameSessionSummaryResponse pauseSession(String sessionCode) {
+    public GameSessionParticipantsResponse pauseSession(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
 
         try {
@@ -313,12 +383,12 @@ public class GameSessionCommandService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage(), exception);
         }
 
-        GameSession savedSession = gameSessionRepository.save(session);
-        return toSummary(savedSession);
+        gameSessionRepository.save(session);
+        return gameSessionQueryService.getParticipants(sessionCode);
     }
 
     @Transactional
-    public GameSessionSummaryResponse finishSession(String sessionCode) {
+    public GameSessionParticipantsResponse finishSession(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
 
         try {
@@ -327,8 +397,8 @@ public class GameSessionCommandService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, exception.getMessage(), exception);
         }
 
-        GameSession savedSession = gameSessionRepository.save(session);
-        return toSummary(savedSession);
+        gameSessionRepository.save(session);
+        return gameSessionQueryService.getParticipants(sessionCode);
     }
 
     @Transactional
@@ -358,6 +428,32 @@ public class GameSessionCommandService {
         if (!exclusivePlayers.isEmpty()) {
             playerRepository.deleteAll(exclusivePlayers);
         }
+    }
+
+    private GameSession getRuntimeEditableSessionOrThrow(String sessionCode) {
+        GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+
+        if (session.getStatus() == GameSessionStatus.FINISHED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Управление этапами и таймером недоступно после завершения игры.");
+        }
+
+        return session;
+    }
+
+    private SessionStageSetting getStageOrThrow(GameSession session, Integer stageNumber) {
+        return sessionStageSettingRepository.findAllByGameSessionIdOrderByStageNumberAsc(session.getId())
+                .stream()
+                .filter(stage -> stage.getStageNumber() == stageNumber)
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Этап с таким номером не найден."));
+    }
+
+    private SessionStageSetting getActiveStageOrThrow(GameSession session) {
+        if (session.getActiveStageNumber() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Сначала выберите этап сессии.");
+        }
+
+        return getStageOrThrow(session, session.getActiveStageNumber());
     }
 
     private void clearRolesForParticipants(List<SessionParticipant> participants) {

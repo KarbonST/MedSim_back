@@ -20,6 +20,7 @@ import ru.vstu.medsim.session.dto.GameSessionStageSettingsRequest;
 import ru.vstu.medsim.session.dto.GameSessionSummaryResponse;
 import ru.vstu.medsim.session.dto.GameSessionTeamAssignmentRequest;
 import ru.vstu.medsim.session.dto.GameSessionTeamRenameRequest;
+import ru.vstu.medsim.session.dto.SessionRuntimeStageRequest;
 
 import java.util.List;
 
@@ -106,18 +107,41 @@ public class GameSessionController {
         return gameSessionCommandService.assignManualRole(sessionCode, participantId, request);
     }
 
+    @PatchMapping("/{sessionCode}/runtime/stage")
+    public GameSessionParticipantsResponse selectRuntimeStage(
+            @PathVariable String sessionCode,
+            @Valid @RequestBody SessionRuntimeStageRequest request
+    ) {
+        return gameSessionCommandService.selectRuntimeStage(sessionCode, request);
+    }
+
+    @PatchMapping("/{sessionCode}/runtime/timer/start")
+    public GameSessionParticipantsResponse startRuntimeTimer(@PathVariable String sessionCode) {
+        return gameSessionCommandService.startRuntimeTimer(sessionCode);
+    }
+
+    @PatchMapping("/{sessionCode}/runtime/timer/pause")
+    public GameSessionParticipantsResponse pauseRuntimeTimer(@PathVariable String sessionCode) {
+        return gameSessionCommandService.pauseRuntimeTimer(sessionCode);
+    }
+
+    @PatchMapping("/{sessionCode}/runtime/timer/reset")
+    public GameSessionParticipantsResponse resetRuntimeTimer(@PathVariable String sessionCode) {
+        return gameSessionCommandService.resetRuntimeTimer(sessionCode);
+    }
+
     @PatchMapping("/{sessionCode}/start")
-    public GameSessionSummaryResponse startSession(@PathVariable String sessionCode) {
+    public GameSessionParticipantsResponse startSession(@PathVariable String sessionCode) {
         return gameSessionCommandService.startSession(sessionCode);
     }
 
     @PatchMapping("/{sessionCode}/pause")
-    public GameSessionSummaryResponse pauseSession(@PathVariable String sessionCode) {
+    public GameSessionParticipantsResponse pauseSession(@PathVariable String sessionCode) {
         return gameSessionCommandService.pauseSession(sessionCode);
     }
 
     @PatchMapping("/{sessionCode}/finish")
-    public GameSessionSummaryResponse finishSession(@PathVariable String sessionCode) {
+    public GameSessionParticipantsResponse finishSession(@PathVariable String sessionCode) {
         return gameSessionCommandService.finishSession(sessionCode);
     }
 
