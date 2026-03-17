@@ -89,7 +89,7 @@ public class PlayerSessionService {
         if (!returningParticipant && session.getStatus() != GameSessionStatus.LOBBY) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "К уже начатой сессии можно вернуться только под теми же именем и должностью, с которыми вы входили раньше."
+                    "Не удалось вернуться в сессию. Проверьте код комнаты, имя и должность: повторный вход после старта доступен только под теми же данными, которые использовались раньше."
             );
         }
 

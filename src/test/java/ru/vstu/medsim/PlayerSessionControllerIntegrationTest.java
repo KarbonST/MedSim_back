@@ -285,7 +285,10 @@ class PlayerSessionControllerIntegrationTest {
         mockMvc.perform(post("/api/player-sessions/join")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isConflict());
+                .andExpect(status().isConflict())
+                .andExpect(status().reason(
+                        "Не удалось вернуться в сессию. Проверьте код комнаты, имя и должность: повторный вход после старта доступен только под теми же данными, которые использовались раньше."
+                ));
     }
 
     @Test
