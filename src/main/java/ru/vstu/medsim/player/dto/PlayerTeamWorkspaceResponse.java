@@ -19,6 +19,8 @@ public record PlayerTeamWorkspaceResponse(
         String teamName,
         List<PlayerTeamWorkspaceMemberResponse> teammates,
         List<SessionStageSettingItem> stages,
-        SessionRuntimeItem sessionRuntime
+        SessionRuntimeItem sessionRuntime,
+        boolean inventoryVisible,
+        List<PlayerTeamInventoryItemResponse> teamInventory
 ) {
 }

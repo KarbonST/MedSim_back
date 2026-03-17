@@ -13,6 +13,7 @@ import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.domain.SessionStageSetting;
 import ru.vstu.medsim.session.domain.SessionTeam;
+import ru.vstu.medsim.session.domain.TeamInventoryItem;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
@@ -25,6 +26,7 @@ import ru.vstu.medsim.session.dto.GameSessionTeamAssignmentRequest;
 import ru.vstu.medsim.session.dto.GameSessionTeamRenameRequest;
 import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
 import ru.vstu.medsim.session.repository.SessionTeamRepository;
+import ru.vstu.medsim.session.repository.TeamInventoryItemRepository;
 
 import java.security.SecureRandom;
 import java.util.ArrayList;
@@ -74,18 +76,7 @@ public class GameSessionCommandService {
             "Пластыри"
     );
 
-    private static final List<String> MANDATORY_LEADERSHIP_ROLES = List.of(
-            "Главный врач",
-            "Главная медсестра",
-            "Главный инженер"
-    );
-    private static final List<String> EXECUTOR_ROLES = List.of(
-            "Сестра поликлинического отделения",
-            "Сестра диагностического отделения",
-            "Заместитель главного инженера по медтехнике",
-            "Заместитель главного инженера по АХЧ"
-    );
-    private static final int MAX_UNIQUE_TEAM_ROLE_COUNT = MANDATORY_LEADERSHIP_ROLES.size() + EXECUTOR_ROLES.size();
+    private static final int MAX_UNIQUE_TEAM_ROLE_COUNT = GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.size() + GameRoleCatalog.EXECUTOR_ROLES.size();
 
     private final GameSessionQueryService gameSessionQueryService;
     private final GameSessionRepository gameSessionRepository;
@@ -93,6 +84,8 @@ public class GameSessionCommandService {
     private final PlayerRepository playerRepository;
     private final SessionStageSettingRepository sessionStageSettingRepository;
     private final SessionTeamRepository sessionTeamRepository;
+    private final TeamInventoryItemRepository teamInventoryItemRepository;
+    private final TeamInventoryCatalog teamInventoryCatalog;
 
     public GameSessionCommandService(
             GameSessionQueryService gameSessionQueryService,
@@ -100,7 +93,9 @@ public class GameSessionCommandService {
             SessionParticipantRepository sessionParticipantRepository,
             PlayerRepository playerRepository,
             SessionStageSettingRepository sessionStageSettingRepository,
-            SessionTeamRepository sessionTeamRepository
+            SessionTeamRepository sessionTeamRepository,
+            TeamInventoryItemRepository teamInventoryItemRepository,
+            TeamInventoryCatalog teamInventoryCatalog
     ) {
         this.gameSessionQueryService = gameSessionQueryService;
         this.gameSessionRepository = gameSessionRepository;
@@ -108,6 +103,8 @@ public class GameSessionCommandService {
         this.playerRepository = playerRepository;
         this.sessionStageSettingRepository = sessionStageSettingRepository;
         this.sessionTeamRepository = sessionTeamRepository;
+        this.teamInventoryItemRepository = teamInventoryItemRepository;
+        this.teamInventoryCatalog = teamInventoryCatalog;
     }
 
     @Transactional
@@ -119,10 +116,12 @@ public class GameSessionCommandService {
                 new GameSession(sessionCode, sessionName, GameSessionStatus.LOBBY)
         );
 
-        List<SessionTeam> teams = generateFunnyTeamNames(request.teamCount()).stream()
-                .map(name -> new SessionTeam(session, name.name(), name.sortOrder()))
-                .toList();
-        sessionTeamRepository.saveAll(teams);
+        List<SessionTeam> teams = sessionTeamRepository.saveAll(
+                generateFunnyTeamNames(request.teamCount()).stream()
+                        .map(name -> new SessionTeam(session, name.name(), name.sortOrder()))
+                        .toList()
+        );
+        initializeTeamInventory(teams);
 
         return toSummary(session);
     }
@@ -241,7 +240,7 @@ public class GameSessionCommandService {
 
         List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId());
 
-        if (participants.size() < MANDATORY_LEADERSHIP_ROLES.size()) {
+        if (participants.size() < GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.size()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Для автоматического распределения ролей нужно минимум 3 участника, уже распределённых по командам."
@@ -479,7 +478,7 @@ public class GameSessionCommandService {
                     .filter(role -> role != null && !role.isBlank())
                     .toList();
 
-            List<String> missingLeadershipRoles = MANDATORY_LEADERSHIP_ROLES.stream()
+            List<String> missingLeadershipRoles = GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.stream()
                     .filter(role -> teamRoles.stream().noneMatch(role::equalsIgnoreCase))
                     .toList();
 
@@ -495,7 +494,7 @@ public class GameSessionCommandService {
 
 
     private void validateTeamRoleAssignment(SessionTeam team, List<SessionParticipant> teamParticipants) {
-        if (teamParticipants.size() < MANDATORY_LEADERSHIP_ROLES.size()) {
+        if (teamParticipants.size() < GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.size()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "В команде '%s' недостаточно участников для обязательных руководящих ролей.".formatted(team.getName())
@@ -533,7 +532,7 @@ public class GameSessionCommandService {
                 .toList();
 
         List<Assignment> executorAssignments = new ArrayList<>();
-        if (!assignUniqueExecutorRoles(remainingParticipants, 0, new ArrayList<>(EXECUTOR_ROLES), executorAssignments)) {
+        if (!assignUniqueExecutorRoles(remainingParticipants, 0, new ArrayList<>(GameRoleCatalog.EXECUTOR_ROLES), executorAssignments)) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Невозможно назначить уникальные исполнительские роли в команде '%s' без совпадения с реальными должностями.".formatted(team.getName())
@@ -548,11 +547,11 @@ public class GameSessionCommandService {
             int roleIndex,
             List<Assignment> assignments
     ) {
-        if (roleIndex >= MANDATORY_LEADERSHIP_ROLES.size()) {
+        if (roleIndex >= GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.size()) {
             return true;
         }
 
-        String role = MANDATORY_LEADERSHIP_ROLES.get(roleIndex);
+        String role = GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.get(roleIndex);
         List<SessionParticipant> shuffledParticipants = new ArrayList<>(participants);
         Collections.shuffle(shuffledParticipants, ThreadLocalRandom.current());
 
@@ -651,6 +650,15 @@ public class GameSessionCommandService {
                 participant.getGameRole(),
                 participant.getJoinedAt()
         );
+    }
+
+    private void initializeTeamInventory(List<SessionTeam> teams) {
+        List<TeamInventoryItem> inventoryItems = teams.stream()
+                .flatMap(team -> teamInventoryCatalog.generateInitialInventory().stream()
+                        .map(seed -> new TeamInventoryItem(team, seed.itemName(), seed.quantity())))
+                .toList();
+
+        teamInventoryItemRepository.saveAll(inventoryItems);
     }
 
     private GameSessionSummaryResponse toSummary(GameSession session) {

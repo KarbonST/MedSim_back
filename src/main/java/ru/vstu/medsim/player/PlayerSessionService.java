@@ -11,14 +11,18 @@ import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.player.dto.AvailablePlayerSessionResponse;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinRequest;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinResponse;
+import ru.vstu.medsim.player.dto.PlayerTeamInventoryItemResponse;
 import ru.vstu.medsim.player.dto.PlayerTeamWorkspaceMemberResponse;
 import ru.vstu.medsim.player.dto.PlayerTeamWorkspaceResponse;
 import ru.vstu.medsim.player.repository.GameSessionRepository;
 import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
+import ru.vstu.medsim.session.GameRoleCatalog;
 import ru.vstu.medsim.session.SessionRuntimeSnapshotService;
 import ru.vstu.medsim.session.dto.SessionStageSettingItem;
+import ru.vstu.medsim.session.domain.TeamInventoryItem;
 import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
+import ru.vstu.medsim.session.repository.TeamInventoryItemRepository;
 
 import java.util.List;
 
@@ -30,19 +34,22 @@ public class PlayerSessionService {
     private final SessionParticipantRepository sessionParticipantRepository;
     private final SessionStageSettingRepository sessionStageSettingRepository;
     private final SessionRuntimeSnapshotService sessionRuntimeSnapshotService;
+    private final TeamInventoryItemRepository teamInventoryItemRepository;
 
     public PlayerSessionService(
             PlayerRepository playerRepository,
             GameSessionRepository gameSessionRepository,
             SessionParticipantRepository sessionParticipantRepository,
             SessionStageSettingRepository sessionStageSettingRepository,
-            SessionRuntimeSnapshotService sessionRuntimeSnapshotService
+            SessionRuntimeSnapshotService sessionRuntimeSnapshotService,
+            TeamInventoryItemRepository teamInventoryItemRepository
     ) {
         this.playerRepository = playerRepository;
         this.gameSessionRepository = gameSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.sessionStageSettingRepository = sessionStageSettingRepository;
         this.sessionRuntimeSnapshotService = sessionRuntimeSnapshotService;
+        this.teamInventoryItemRepository = teamInventoryItemRepository;
     }
 
     @Transactional(readOnly = true)
@@ -150,6 +157,15 @@ public class PlayerSessionService {
                 ))
                 .toList();
 
+        boolean inventoryVisible = participant.getGameRole() != null
+                && GameRoleCatalog.INVENTORY_ACCESS_ROLES.contains(participant.getGameRole());
+
+        List<PlayerTeamInventoryItemResponse> teamInventory = !inventoryVisible || participant.getTeam() == null
+                ? List.of()
+                : teamInventoryItemRepository.findAllByTeamIdOrderByItemNameAsc(participant.getTeam().getId()).stream()
+                .map(this::toInventoryItem)
+                .toList();
+
         return new PlayerTeamWorkspaceResponse(
                 participant.getId(),
                 participant.getPlayer().getId(),
@@ -164,8 +180,14 @@ public class PlayerSessionService {
                 participant.getTeam() != null ? participant.getTeam().getName() : null,
                 teammates,
                 stages,
-                sessionRuntimeSnapshotService.buildRuntime(session, stageEntities)
+                sessionRuntimeSnapshotService.buildRuntime(session, stageEntities),
+                inventoryVisible,
+                teamInventory
         );
+    }
+
+    private PlayerTeamInventoryItemResponse toInventoryItem(TeamInventoryItem item) {
+        return new PlayerTeamInventoryItemResponse(item.getItemName(), item.getQuantity());
     }
 
     private String normalizeCode(String sessionCode) {

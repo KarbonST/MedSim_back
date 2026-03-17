@@ -3,6 +3,7 @@ package ru.vstu.medsim;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import ru.vstu.medsim.chat.TeamChatService;
+import ru.vstu.medsim.session.TeamInventoryCatalog;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,6 +51,7 @@ class PlayerSessionControllerIntegrationTest {
     @BeforeEach
     void clearDatabase() {
         jdbcTemplate.update("DELETE FROM session_stage_settings");
+        jdbcTemplate.update("DELETE FROM team_inventory_items");
         jdbcTemplate.update("DELETE FROM session_participants");
         jdbcTemplate.update("DELETE FROM session_teams");
         jdbcTemplate.update("DELETE FROM players");
@@ -113,6 +115,92 @@ class PlayerSessionControllerIntegrationTest {
                         .content(objectMapper.writeValueAsString(Map.of("teamName", "Гроза Термометров"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.teams[0].teamName").value("Гроза Термометров"));
+    }
+
+    @Test
+    void shouldCreateRandomTeamInventoryForEveryTeam() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+
+        Integer inventoryCount = jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM team_inventory_items ti
+                JOIN session_teams st ON st.id = ti.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                """,
+                Integer.class,
+                sessionCode
+        );
+
+        List<Integer> itemCountsPerTeam = jdbcTemplate.queryForList(
+                """
+                SELECT COUNT(*)
+                FROM team_inventory_items ti
+                JOIN session_teams st ON st.id = ti.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                GROUP BY st.id
+                ORDER BY st.sort_order
+                """,
+                Integer.class,
+                sessionCode
+        );
+
+        List<String> itemNames = jdbcTemplate.queryForList(
+                """
+                SELECT ti.item_name
+                FROM team_inventory_items ti
+                JOIN session_teams st ON st.id = ti.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                """,
+                String.class,
+                sessionCode
+        );
+
+        Set<String> allowedItems = Set.copyOf(new TeamInventoryCatalog().getAllItemNames());
+
+        assertThat(inventoryCount).isEqualTo(12);
+        assertThat(itemCountsPerTeam).containsExactly(6, 6);
+        assertThat(itemNames).allMatch(allowedItems::contains);
+    }
+
+    @Test
+    void shouldExposeTeamInventoryOnlyForLeadershipRoles() throws Exception {
+        String sessionCode = createSession("Тестовая смена", 2);
+
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
+        joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
+        joinPlayer("Павел Орлов", "Главный врач", sessionCode);
+        joinPlayer("Ольга Смирнова", "Сестра поликлинического отделения", sessionCode);
+
+        Long teamId = firstTeamId(sessionCode);
+        Long annaId = participantIdByName(sessionCode, "Анна Петрова");
+        Long ivanId = participantIdByName(sessionCode, "Иван Сидоров");
+        Long pavelId = participantIdByName(sessionCode, "Павел Орлов");
+        Long olgaId = participantIdByName(sessionCode, "Ольга Смирнова");
+
+        assignParticipantToTeam(sessionCode, annaId, teamId);
+        assignParticipantToTeam(sessionCode, ivanId, teamId);
+        assignParticipantToTeam(sessionCode, pavelId, teamId);
+        assignParticipantToTeam(sessionCode, olgaId, teamId);
+
+        assignManualRole(sessionCode, annaId, "Главная медсестра");
+        assignManualRole(sessionCode, ivanId, "Главный инженер");
+        assignManualRole(sessionCode, pavelId, "Главный врач");
+        assignManualRole(sessionCode, olgaId, "Сестра поликлинического отделения");
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, annaId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventoryVisible").value(true))
+                .andExpect(jsonPath("$.teamInventory.length()").value(6))
+                .andExpect(jsonPath("$.teamInventory[0].itemName").isNotEmpty());
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, olgaId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventoryVisible").value(false))
+                .andExpect(jsonPath("$.teamInventory.length()").value(0));
     }
 
     @Test
