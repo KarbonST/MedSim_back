@@ -126,7 +126,7 @@ public class GameSessionCommandService {
                         .toList()
         );
         initializeTeamInventory(teams);
-        sessionEconomyService.initializeForSession(session, teams);
+        sessionEconomyService.initializeForSession(session, teams, request.startingBudget(), request.stageTimeUnits());
 
         return toSummary(session);
     }

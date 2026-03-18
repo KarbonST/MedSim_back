@@ -55,7 +55,7 @@ class SessionEconomyIntegrationTest {
 
     @Test
     void shouldInitializeEconomyForEveryCreatedSession() throws Exception {
-        String sessionCode = createSession("Экономическая сессия", 2);
+        String sessionCode = createSession("Экономическая сессия", 2, new BigDecimal("15.00"), 15);
 
         Integer settingsCount = jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM session_economy_settings ses JOIN game_sessions gs ON gs.id = ses.game_session_id WHERE gs.code = ?",
@@ -98,8 +98,52 @@ class SessionEconomyIntegrationTest {
     }
 
     @Test
+    void shouldPersistCustomEconomySettingsForCreatedSession() throws Exception {
+        String sessionCode = createSession("Кастомная экономическая сессия", 3, new BigDecimal("25.50"), 18);
+
+        BigDecimal storedBudget = jdbcTemplate.queryForObject(
+                "SELECT ses.starting_budget FROM session_economy_settings ses JOIN game_sessions gs ON gs.id = ses.game_session_id WHERE gs.code = ?",
+                BigDecimal.class,
+                sessionCode
+        );
+        Integer storedStageTimeUnits = jdbcTemplate.queryForObject(
+                "SELECT ses.stage_time_units FROM session_economy_settings ses JOIN game_sessions gs ON gs.id = ses.game_session_id WHERE gs.code = ?",
+                Integer.class,
+                sessionCode
+        );
+        List<BigDecimal> balances = jdbcTemplate.queryForList(
+                "SELECT tes.current_balance FROM team_economy_states tes JOIN session_teams st ON st.id = tes.team_id JOIN game_sessions gs ON gs.id = st.game_session_id WHERE gs.code = ? ORDER BY st.sort_order",
+                BigDecimal.class,
+                sessionCode
+        );
+        List<Integer> stageTimeUnits = jdbcTemplate.queryForList(
+                "SELECT tes.current_stage_time_units FROM team_economy_states tes JOIN session_teams st ON st.id = tes.team_id JOIN game_sessions gs ON gs.id = st.game_session_id WHERE gs.code = ? ORDER BY st.sort_order",
+                Integer.class,
+                sessionCode
+        );
+
+        assertThat(storedBudget).isEqualByComparingTo(new BigDecimal("25.50"));
+        assertThat(storedStageTimeUnits).isEqualTo(18);
+        assertThat(balances).containsExactly(
+                new BigDecimal("25.50"),
+                new BigDecimal("25.50"),
+                new BigDecimal("25.50")
+        );
+        assertThat(stageTimeUnits).containsExactly(18, 18, 18);
+
+        mockMvc.perform(get("/api/game-sessions/{sessionCode}/economy", sessionCode)
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic("facilitator", "medsim123")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.settings.startingBudget").value(25.50))
+                .andExpect(jsonPath("$.settings.stageTimeUnits").value(18))
+                .andExpect(jsonPath("$.teams", hasSize(3)))
+                .andExpect(jsonPath("$.teams[0].currentBalance").value(25.50))
+                .andExpect(jsonPath("$.teams[0].currentStageTimeUnits").value(18));
+    }
+
+    @Test
     void shouldExposeEconomyOverviewForFacilitator() throws Exception {
-        String sessionCode = createSession("Экономическая сессия", 2);
+        String sessionCode = createSession("Экономическая сессия", 2, new BigDecimal("15.00"), 15);
 
         mockMvc.perform(get("/api/game-sessions/{sessionCode}/economy", sessionCode)
                         .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic("facilitator", "medsim123")))
@@ -115,7 +159,7 @@ class SessionEconomyIntegrationTest {
 
     @Test
     void shouldResetTeamStageTimeUnitsWhenSelectingStage() throws Exception {
-        String sessionCode = createSession("Экономическая сессия", 2);
+        String sessionCode = createSession("Экономическая сессия", 2, new BigDecimal("22.00"), 17);
 
         saveTwoStages(sessionCode);
 
@@ -137,16 +181,18 @@ class SessionEconomyIntegrationTest {
                 sessionCode
         );
 
-        assertThat(stageTimeUnits).containsExactly(15, 15);
+        assertThat(stageTimeUnits).containsExactly(17, 17);
     }
 
-    private String createSession(String sessionName, int teamCount) throws Exception {
+    private String createSession(String sessionName, int teamCount, BigDecimal startingBudget, int stageTimeUnits) throws Exception {
         String response = mockMvc.perform(post("/api/game-sessions")
                         .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic("facilitator", "medsim123"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of(
                                 "sessionName", sessionName,
-                                "teamCount", teamCount
+                                "teamCount", teamCount,
+                                "startingBudget", startingBudget,
+                                "stageTimeUnits", stageTimeUnits
                         ))))
                 .andExpect(status().isOk())
                 .andReturn()

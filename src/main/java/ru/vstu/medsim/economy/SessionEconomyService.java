@@ -29,6 +29,7 @@ import ru.vstu.medsim.session.domain.SessionTeam;
 import ru.vstu.medsim.session.repository.SessionTeamRepository;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -73,9 +74,21 @@ public class SessionEconomyService {
     }
 
     @Transactional
-    public void initializeForSession(GameSession session, List<SessionTeam> teams) {
+    public void initializeForSession(
+            GameSession session,
+            List<SessionTeam> teams,
+            BigDecimal startingBudget,
+            Integer stageTimeUnits
+    ) {
+        BigDecimal resolvedStartingBudget = startingBudget != null
+                ? startingBudget.setScale(2, RoundingMode.HALF_UP)
+                : DEFAULT_STARTING_BUDGET;
+        int resolvedStageTimeUnits = stageTimeUnits != null
+                ? stageTimeUnits
+                : DEFAULT_STAGE_TIME_UNITS;
+
         sessionEconomySettingsRepository.save(
-                new SessionEconomySettings(session, DEFAULT_STARTING_BUDGET, DEFAULT_STAGE_TIME_UNITS)
+                new SessionEconomySettings(session, resolvedStartingBudget, resolvedStageTimeUnits)
         );
 
         if (teams.isEmpty()) {
@@ -94,7 +107,7 @@ public class SessionEconomyService {
 
         teamEconomyStateRepository.saveAll(
                 teams.stream()
-                        .map(team -> new TeamEconomyState(team, DEFAULT_STARTING_BUDGET, DEFAULT_STAGE_TIME_UNITS))
+                        .map(team -> new TeamEconomyState(team, resolvedStartingBudget, resolvedStageTimeUnits))
                         .toList()
         );
 
