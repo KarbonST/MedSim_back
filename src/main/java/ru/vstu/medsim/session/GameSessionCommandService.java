@@ -4,6 +4,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import ru.vstu.medsim.economy.SessionEconomyService;
 import ru.vstu.medsim.player.domain.GameSession;
 import ru.vstu.medsim.player.domain.GameSessionStatus;
 import ru.vstu.medsim.player.domain.Player;
@@ -86,6 +87,7 @@ public class GameSessionCommandService {
     private final SessionTeamRepository sessionTeamRepository;
     private final TeamInventoryItemRepository teamInventoryItemRepository;
     private final TeamInventoryCatalog teamInventoryCatalog;
+    private final SessionEconomyService sessionEconomyService;
 
     public GameSessionCommandService(
             GameSessionQueryService gameSessionQueryService,
@@ -95,7 +97,8 @@ public class GameSessionCommandService {
             SessionStageSettingRepository sessionStageSettingRepository,
             SessionTeamRepository sessionTeamRepository,
             TeamInventoryItemRepository teamInventoryItemRepository,
-            TeamInventoryCatalog teamInventoryCatalog
+            TeamInventoryCatalog teamInventoryCatalog,
+            SessionEconomyService sessionEconomyService
     ) {
         this.gameSessionQueryService = gameSessionQueryService;
         this.gameSessionRepository = gameSessionRepository;
@@ -105,6 +108,7 @@ public class GameSessionCommandService {
         this.sessionTeamRepository = sessionTeamRepository;
         this.teamInventoryItemRepository = teamInventoryItemRepository;
         this.teamInventoryCatalog = teamInventoryCatalog;
+        this.sessionEconomyService = sessionEconomyService;
     }
 
     @Transactional
@@ -122,6 +126,7 @@ public class GameSessionCommandService {
                         .toList()
         );
         initializeTeamInventory(teams);
+        sessionEconomyService.initializeForSession(session, teams);
 
         return toSummary(session);
     }
@@ -225,6 +230,7 @@ public class GameSessionCommandService {
         SessionStageSetting firstStage = stageSettings.get(0);
         session.initializeStageRuntime(firstStage.getStageNumber(), firstStage.getDurationMinutes());
         gameSessionRepository.save(session);
+        sessionEconomyService.resetStageTimeForSession(session.getId());
 
         return gameSessionQueryService.getParticipants(sessionCode);
     }
@@ -293,6 +299,7 @@ public class GameSessionCommandService {
         }
 
         gameSessionRepository.save(session);
+        sessionEconomyService.resetStageTimeForSession(session.getId());
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 
@@ -342,6 +349,7 @@ public class GameSessionCommandService {
     @Transactional
     public GameSessionParticipantsResponse startSession(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+        boolean startingFromLobby = session.getStatus() == GameSessionStatus.LOBBY;
         List<SessionStageSetting> stages = sessionStageSettingRepository.findAllByGameSessionIdOrderByStageNumberAsc(session.getId());
 
         if (stages.isEmpty()) {
@@ -369,6 +377,11 @@ public class GameSessionCommandService {
         }
 
         gameSessionRepository.save(session);
+
+        if (startingFromLobby) {
+            sessionEconomyService.resetStageTimeForSession(session.getId());
+        }
+
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 

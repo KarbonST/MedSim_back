@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import ru.vstu.medsim.economy.SessionEconomyService;
+import ru.vstu.medsim.economy.dto.GameSessionEconomyResponse;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
@@ -30,13 +32,16 @@ public class GameSessionController {
 
     private final GameSessionQueryService gameSessionQueryService;
     private final GameSessionCommandService gameSessionCommandService;
+    private final SessionEconomyService sessionEconomyService;
 
     public GameSessionController(
             GameSessionQueryService gameSessionQueryService,
-            GameSessionCommandService gameSessionCommandService
+            GameSessionCommandService gameSessionCommandService,
+            SessionEconomyService sessionEconomyService
     ) {
         this.gameSessionQueryService = gameSessionQueryService;
         this.gameSessionCommandService = gameSessionCommandService;
+        this.sessionEconomyService = sessionEconomyService;
     }
 
     @GetMapping
@@ -52,6 +57,11 @@ public class GameSessionController {
     @GetMapping("/{sessionCode}/participants")
     public GameSessionParticipantsResponse getParticipants(@PathVariable String sessionCode) {
         return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @GetMapping("/{sessionCode}/economy")
+    public GameSessionEconomyResponse getEconomy(@PathVariable String sessionCode) {
+        return sessionEconomyService.getEconomyOverview(sessionCode);
     }
 
     @PatchMapping("/{sessionCode}/name")
