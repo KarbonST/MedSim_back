@@ -22,6 +22,7 @@ import ru.vstu.medsim.session.dto.GameSessionStageSettingsRequest;
 import ru.vstu.medsim.session.dto.GameSessionSummaryResponse;
 import ru.vstu.medsim.session.dto.GameSessionTeamAssignmentRequest;
 import ru.vstu.medsim.session.dto.GameSessionTeamRenameRequest;
+import ru.vstu.medsim.session.dto.SessionEconomySettingsUpdateRequest;
 import ru.vstu.medsim.session.dto.SessionRuntimeStageRequest;
 
 import java.util.List;
@@ -62,6 +63,14 @@ public class GameSessionController {
     @GetMapping("/{sessionCode}/economy")
     public GameSessionEconomyResponse getEconomy(@PathVariable String sessionCode) {
         return sessionEconomyService.getEconomyOverview(sessionCode);
+    }
+
+    @PutMapping("/{sessionCode}/economy/settings")
+    public GameSessionEconomyResponse updateEconomySettings(
+            @PathVariable String sessionCode,
+            @Valid @RequestBody SessionEconomySettingsUpdateRequest request
+    ) {
+        return sessionEconomyService.updateEconomySettings(sessionCode, request);
     }
 
     @PatchMapping("/{sessionCode}/name")

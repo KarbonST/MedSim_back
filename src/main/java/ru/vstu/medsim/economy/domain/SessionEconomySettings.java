@@ -51,6 +51,11 @@ public class SessionEconomySettings {
         }
     }
 
+    public void update(BigDecimal startingBudget, Integer stageTimeUnits) {
+        this.startingBudget = startingBudget;
+        this.stageTimeUnits = stageTimeUnits;
+    }
+
     public Long getId() {
         return id;
     }

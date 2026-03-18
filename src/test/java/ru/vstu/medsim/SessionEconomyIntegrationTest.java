@@ -142,6 +142,70 @@ class SessionEconomyIntegrationTest {
     }
 
     @Test
+    void shouldAllowUpdatingEconomySettingsInLobby() throws Exception {
+        String sessionCode = createSession("Обновляемая экономическая сессия", 2, new BigDecimal("15.00"), 15);
+
+        mockMvc.perform(put("/api/game-sessions/{sessionCode}/economy/settings", sessionCode)
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic("facilitator", "medsim123"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "startingBudget", new BigDecimal("31.25"),
+                                "stageTimeUnits", 21
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.settings.startingBudget").value(31.25))
+                .andExpect(jsonPath("$.settings.stageTimeUnits").value(21))
+                .andExpect(jsonPath("$.teams", hasSize(2)))
+                .andExpect(jsonPath("$.teams[0].currentBalance").value(31.25))
+                .andExpect(jsonPath("$.teams[0].currentStageTimeUnits").value(21));
+
+        BigDecimal storedBudget = jdbcTemplate.queryForObject(
+                "SELECT ses.starting_budget FROM session_economy_settings ses JOIN game_sessions gs ON gs.id = ses.game_session_id WHERE gs.code = ?",
+                BigDecimal.class,
+                sessionCode
+        );
+        Integer storedStageTimeUnits = jdbcTemplate.queryForObject(
+                "SELECT ses.stage_time_units FROM session_economy_settings ses JOIN game_sessions gs ON gs.id = ses.game_session_id WHERE gs.code = ?",
+                Integer.class,
+                sessionCode
+        );
+        List<BigDecimal> balances = jdbcTemplate.queryForList(
+                "SELECT tes.current_balance FROM team_economy_states tes JOIN session_teams st ON st.id = tes.team_id JOIN game_sessions gs ON gs.id = st.game_session_id WHERE gs.code = ? ORDER BY st.sort_order",
+                BigDecimal.class,
+                sessionCode
+        );
+        List<Integer> stageTimeUnits = jdbcTemplate.queryForList(
+                "SELECT tes.current_stage_time_units FROM team_economy_states tes JOIN session_teams st ON st.id = tes.team_id JOIN game_sessions gs ON gs.id = st.game_session_id WHERE gs.code = ? ORDER BY st.sort_order",
+                Integer.class,
+                sessionCode
+        );
+
+        assertThat(storedBudget).isEqualByComparingTo(new BigDecimal("31.25"));
+        assertThat(storedStageTimeUnits).isEqualTo(21);
+        assertThat(balances).containsExactly(new BigDecimal("31.25"), new BigDecimal("31.25"));
+        assertThat(stageTimeUnits).containsExactly(21, 21);
+    }
+
+    @Test
+    void shouldRejectUpdatingEconomySettingsAfterSessionStart() throws Exception {
+        String sessionCode = createSession("Зафиксированная экономическая сессия", 2, new BigDecimal("15.00"), 15);
+
+        jdbcTemplate.update(
+                "UPDATE game_sessions SET status = 'IN_PROGRESS' WHERE code = ?",
+                sessionCode
+        );
+
+        mockMvc.perform(put("/api/game-sessions/{sessionCode}/economy/settings", sessionCode)
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic("facilitator", "medsim123"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "startingBudget", new BigDecimal("20.00"),
+                                "stageTimeUnits", 20
+                        ))))
+                .andExpect(status().isConflict());
+    }
+
+    @Test
     void shouldExposeEconomyOverviewForFacilitator() throws Exception {
         String sessionCode = createSession("Экономическая сессия", 2, new BigDecimal("15.00"), 15);
 

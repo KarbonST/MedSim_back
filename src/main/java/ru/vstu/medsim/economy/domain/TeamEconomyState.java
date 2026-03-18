@@ -94,6 +94,15 @@ public class TeamEconomyState {
         this.currentStageTimeUnits = stageTimeUnits;
     }
 
+    public void resetForLobby(BigDecimal startingBudget, int stageTimeUnits) {
+        this.currentBalance = startingBudget;
+        this.currentStageTimeUnits = stageTimeUnits;
+        this.totalIncome = BigDecimal.ZERO.setScale(2);
+        this.totalExpenses = BigDecimal.ZERO.setScale(2);
+        this.totalPenalties = BigDecimal.ZERO.setScale(2);
+        this.totalBonuses = BigDecimal.ZERO.setScale(2);
+    }
+
     public Long getId() {
         return id;
     }

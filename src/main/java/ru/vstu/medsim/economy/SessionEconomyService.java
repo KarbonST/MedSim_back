@@ -24,8 +24,10 @@ import ru.vstu.medsim.economy.repository.TeamEconomyStateRepository;
 import ru.vstu.medsim.economy.repository.TeamProblemStateRepository;
 import ru.vstu.medsim.economy.repository.TeamRoomStateRepository;
 import ru.vstu.medsim.player.domain.GameSession;
+import ru.vstu.medsim.player.domain.GameSessionStatus;
 import ru.vstu.medsim.session.GameSessionQueryService;
 import ru.vstu.medsim.session.domain.SessionTeam;
+import ru.vstu.medsim.session.dto.SessionEconomySettingsUpdateRequest;
 import ru.vstu.medsim.session.repository.SessionTeamRepository;
 
 import java.math.BigDecimal;
@@ -80,12 +82,8 @@ public class SessionEconomyService {
             BigDecimal startingBudget,
             Integer stageTimeUnits
     ) {
-        BigDecimal resolvedStartingBudget = startingBudget != null
-                ? startingBudget.setScale(2, RoundingMode.HALF_UP)
-                : DEFAULT_STARTING_BUDGET;
-        int resolvedStageTimeUnits = stageTimeUnits != null
-                ? stageTimeUnits
-                : DEFAULT_STAGE_TIME_UNITS;
+        BigDecimal resolvedStartingBudget = resolveStartingBudget(startingBudget);
+        int resolvedStageTimeUnits = resolveStageTimeUnits(stageTimeUnits);
 
         sessionEconomySettingsRepository.save(
                 new SessionEconomySettings(session, resolvedStartingBudget, resolvedStageTimeUnits)
@@ -138,6 +136,30 @@ public class SessionEconomyService {
 
         teamEconomyStateRepository.findAllByTeamGameSessionIdOrderByTeamSortOrderAscIdAsc(gameSessionId)
                 .forEach(teamEconomyState -> teamEconomyState.resetStageTime(settings.getStageTimeUnits()));
+    }
+
+    @Transactional
+    public GameSessionEconomyResponse updateEconomySettings(
+            String sessionCode,
+            SessionEconomySettingsUpdateRequest request
+    ) {
+        GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+
+        if (session.getStatus() != GameSessionStatus.LOBBY) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Экономические настройки можно менять только до старта игры.");
+        }
+
+        BigDecimal resolvedStartingBudget = resolveStartingBudget(request.startingBudget());
+        int resolvedStageTimeUnits = resolveStageTimeUnits(request.stageTimeUnits());
+
+        SessionEconomySettings settings = sessionEconomySettingsRepository.findByGameSessionId(session.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Настройки экономики сессии не найдены."));
+        settings.update(resolvedStartingBudget, resolvedStageTimeUnits);
+
+        teamEconomyStateRepository.findAllByTeamGameSessionIdOrderByTeamSortOrderAscIdAsc(session.getId())
+                .forEach(teamEconomyState -> teamEconomyState.resetForLobby(resolvedStartingBudget, resolvedStageTimeUnits));
+
+        return getEconomyOverview(sessionCode);
     }
 
     @Transactional(readOnly = true)
@@ -259,5 +281,17 @@ public class SessionEconomyService {
                 stateCoefficient,
                 problemItems
         );
+    }
+
+    private BigDecimal resolveStartingBudget(BigDecimal startingBudget) {
+        return startingBudget != null
+                ? startingBudget.setScale(2, RoundingMode.HALF_UP)
+                : DEFAULT_STARTING_BUDGET;
+    }
+
+    private int resolveStageTimeUnits(Integer stageTimeUnits) {
+        return stageTimeUnits != null
+                ? stageTimeUnits
+                : DEFAULT_STAGE_TIME_UNITS;
     }
 }
