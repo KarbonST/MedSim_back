@@ -355,6 +355,7 @@ DB_USERNAME=medsim_user
 DB_PASSWORD=medsim_password
 DB_PORT=5433
 SERVER_PORT=8080
+FRONTEND_PORT=5173
 DB_URL=jdbc:postgresql://localhost:5433/medsim
 ```
 
@@ -362,15 +363,39 @@ DB_URL=jdbc:postgresql://localhost:5433/medsim
 
 ## Как запустить
 
-### 1. Поднять PostgreSQL
+### Вариант 1. Поднять весь стек одной командой через Docker
 
 ```bash
 cd /Users/mihailbykadorov/Desktop/MedSim/MedSim_back
 cp .env.example .env
-docker compose --env-file .env up -d
+docker compose --env-file .env up --build -d
 ```
 
-### 2. Запустить backend
+После запуска доступны:
+
+- `http://localhost:5173` — frontend
+- `http://localhost:8080` — backend API
+
+Важно: этот compose-файл собирает не только backend и PostgreSQL, но и frontend из соседнего репозитория `../MedSim_front`. Для такого запуска `MedSim_back` и `MedSim_front` должны лежать рядом в одной родительской папке.
+
+Остановка всего стека:
+
+```bash
+cd /Users/mihailbykadorov/Desktop/MedSim/MedSim_back
+docker compose down
+```
+
+### Вариант 2. Локальная разработка по отдельности
+
+#### 1. Поднять PostgreSQL
+
+```bash
+cd /Users/mihailbykadorov/Desktop/MedSim/MedSim_back
+cp .env.example .env
+docker compose --env-file .env up -d postgres
+```
+
+#### 2. Запустить backend
 
 ```bash
 cd /Users/mihailbykadorov/Desktop/MedSim/MedSim_back
