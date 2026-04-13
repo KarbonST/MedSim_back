@@ -1,0 +1,12 @@
+package ru.vstu.medsim.kanban.domain;
+
+public enum KanbanCardEventType {
+    PRIORITY_SET,
+    DEPARTMENT_ASSIGNED,
+    EXECUTOR_ASSIGNED,
+    WORK_STARTED,
+    SENT_TO_DEPARTMENT_REVIEW,
+    DEPARTMENT_APPROVED,
+    CHIEF_DOCTOR_APPROVED,
+    RETURNED_TO_STAGE
+}

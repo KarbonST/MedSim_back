@@ -8,4 +8,6 @@ import java.util.List;
 public interface TeamProblemStateRepository extends JpaRepository<TeamProblemState, Long> {
 
     List<TeamProblemState> findAllByTeamRoomStateIdInOrderByTeamRoomStateClinicRoomSortOrderAscProblemTemplateProblemNumberAscIdAsc(List<Long> teamRoomStateIds);
+
+    List<TeamProblemState> findAllByTeamRoomStateTeamIdOrderByTeamRoomStateClinicRoomSortOrderAscProblemTemplateProblemNumberAscIdAsc(Long teamId);
 }

@@ -12,6 +12,7 @@ public record TeamEconomyItem(
         BigDecimal totalExpenses,
         BigDecimal totalPenalties,
         BigDecimal totalBonuses,
-        List<TeamRoomEconomyItem> rooms
+        List<TeamRoomEconomyItem> rooms,
+        List<TeamEconomyEventItem> recentEvents
 ) {
 }

@@ -1,5 +1,8 @@
 package ru.vstu.medsim.player.dto;
 
+import ru.vstu.medsim.economy.dto.TeamEconomyItem;
+import ru.vstu.medsim.kanban.dto.PlayerKanbanNotificationItem;
+import ru.vstu.medsim.kanban.dto.TeamKanbanBoardItem;
 import ru.vstu.medsim.session.dto.SessionRuntimeItem;
 import ru.vstu.medsim.session.dto.SessionStageSettingItem;
 
@@ -21,6 +24,9 @@ public record PlayerTeamWorkspaceResponse(
         List<SessionStageSettingItem> stages,
         SessionRuntimeItem sessionRuntime,
         boolean inventoryVisible,
-        List<PlayerTeamInventoryItemResponse> teamInventory
+        List<PlayerTeamInventoryItemResponse> teamInventory,
+        List<PlayerKanbanNotificationItem> kanbanNotifications,
+        TeamKanbanBoardItem teamKanbanBoard,
+        TeamEconomyItem teamEconomy
 ) {
 }

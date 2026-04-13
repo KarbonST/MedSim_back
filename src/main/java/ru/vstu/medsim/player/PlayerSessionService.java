@@ -4,11 +4,14 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import ru.vstu.medsim.economy.SessionEconomyService;
+import ru.vstu.medsim.kanban.KanbanService;
 import ru.vstu.medsim.player.domain.GameSession;
 import ru.vstu.medsim.player.domain.GameSessionStatus;
 import ru.vstu.medsim.player.domain.Player;
 import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.player.dto.AvailablePlayerSessionResponse;
+import ru.vstu.medsim.player.dto.PlayerKanbanCardStatusUpdateRequest;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinRequest;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinResponse;
 import ru.vstu.medsim.player.dto.PlayerTeamInventoryItemResponse;
@@ -19,8 +22,9 @@ import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.GameRoleCatalog;
 import ru.vstu.medsim.session.SessionRuntimeSnapshotService;
-import ru.vstu.medsim.session.dto.SessionStageSettingItem;
+import ru.vstu.medsim.session.domain.StageInteractionMode;
 import ru.vstu.medsim.session.domain.TeamInventoryItem;
+import ru.vstu.medsim.session.dto.SessionStageSettingItem;
 import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
 import ru.vstu.medsim.session.repository.TeamInventoryItemRepository;
 
@@ -35,6 +39,8 @@ public class PlayerSessionService {
     private final SessionStageSettingRepository sessionStageSettingRepository;
     private final SessionRuntimeSnapshotService sessionRuntimeSnapshotService;
     private final TeamInventoryItemRepository teamInventoryItemRepository;
+    private final SessionEconomyService sessionEconomyService;
+    private final KanbanService kanbanService;
 
     public PlayerSessionService(
             PlayerRepository playerRepository,
@@ -42,7 +48,9 @@ public class PlayerSessionService {
             SessionParticipantRepository sessionParticipantRepository,
             SessionStageSettingRepository sessionStageSettingRepository,
             SessionRuntimeSnapshotService sessionRuntimeSnapshotService,
-            TeamInventoryItemRepository teamInventoryItemRepository
+            TeamInventoryItemRepository teamInventoryItemRepository,
+            SessionEconomyService sessionEconomyService,
+            KanbanService kanbanService
     ) {
         this.playerRepository = playerRepository;
         this.gameSessionRepository = gameSessionRepository;
@@ -50,6 +58,8 @@ public class PlayerSessionService {
         this.sessionStageSettingRepository = sessionStageSettingRepository;
         this.sessionRuntimeSnapshotService = sessionRuntimeSnapshotService;
         this.teamInventoryItemRepository = teamInventoryItemRepository;
+        this.sessionEconomyService = sessionEconomyService;
+        this.kanbanService = kanbanService;
     }
 
     @Transactional(readOnly = true)
@@ -115,8 +125,42 @@ public class PlayerSessionService {
         );
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public PlayerTeamWorkspaceResponse getWorkspace(String sessionCode, Long participantId) {
+        SessionWorkspaceAccess access = resolveWorkspaceAccess(sessionCode, participantId);
+        return buildWorkspace(access.session(), access.participant());
+    }
+
+    @Transactional
+    public PlayerTeamWorkspaceResponse updateKanbanCardStatus(
+            String sessionCode,
+            Long participantId,
+            Long cardId,
+            PlayerKanbanCardStatusUpdateRequest request
+    ) {
+        SessionWorkspaceAccess access = resolveWorkspaceAccess(sessionCode, participantId);
+        GameSession session = access.session();
+        SessionParticipant participant = access.participant();
+
+        if (session.getStatus() == GameSessionStatus.LOBBY) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Канбан-доска доступна после старта игры.");
+        }
+
+        if (session.getStatus() == GameSessionStatus.FINISHED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Канбан-доска недоступна после завершения игры.");
+        }
+
+        if (participant.getTeam() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Сначала ведущий должен назначить вам команду.");
+        }
+
+        ensureKanbanIsAvailableForActiveStage(session);
+
+        kanbanService.updateCardStatus(session, participant.getTeam(), participant, cardId, request);
+        return buildWorkspace(session, participant);
+    }
+
+    private SessionWorkspaceAccess resolveWorkspaceAccess(String sessionCode, Long participantId) {
         String normalizedCode = normalizeCode(sessionCode);
 
         GameSession session = gameSessionRepository.findByCode(normalizedCode)
@@ -130,6 +174,11 @@ public class PlayerSessionService {
                         HttpStatus.NOT_FOUND,
                         "Участник не найден в указанной сессии."
                 ));
+
+        return new SessionWorkspaceAccess(session, participant);
+    }
+
+    private PlayerTeamWorkspaceResponse buildWorkspace(GameSession session, SessionParticipant participant) {
 
         List<PlayerTeamWorkspaceMemberResponse> teammates = participant.getTeam() == null
                 ? List.of()
@@ -182,8 +231,28 @@ public class PlayerSessionService {
                 stages,
                 sessionRuntimeSnapshotService.buildRuntime(session, stageEntities),
                 inventoryVisible,
-                teamInventory
+                teamInventory,
+                participant.getTeam() != null ? kanbanService.getNotificationsForParticipant(participant) : List.of(),
+                participant.getTeam() != null ? kanbanService.getTeamBoard(participant.getTeam(), session.getActiveStageNumber()) : null,
+                participant.getTeam() != null ? sessionEconomyService.getTeamEconomy(participant.getTeam()) : null
         );
+    }
+
+    private void ensureKanbanIsAvailableForActiveStage(GameSession session) {
+        if (session.getActiveStageNumber() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Сначала ведущий должен выбрать активный этап игры.");
+        }
+
+        ru.vstu.medsim.session.domain.SessionStageSetting activeStage = sessionStageSettingRepository
+                .findAllByGameSessionIdOrderByStageNumberAsc(session.getId())
+                .stream()
+                .filter(stage -> stage.getStageNumber().equals(session.getActiveStageNumber()))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Активный этап сессии не найден."));
+
+        if (activeStage.getInteractionMode() != StageInteractionMode.CHAT_AND_KANBAN) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Канбан-доска доступна только на этапах 'чат + канбан'.");
+        }
     }
 
     private PlayerTeamInventoryItemResponse toInventoryItem(TeamInventoryItem item) {
@@ -192,5 +261,8 @@ public class PlayerSessionService {
 
     private String normalizeCode(String sessionCode) {
         return sessionCode.trim().toUpperCase();
+    }
+
+    private record SessionWorkspaceAccess(GameSession session, SessionParticipant participant) {
     }
 }

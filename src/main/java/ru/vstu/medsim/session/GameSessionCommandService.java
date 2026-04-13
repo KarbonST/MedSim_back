@@ -5,6 +5,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import ru.vstu.medsim.economy.SessionEconomyService;
+import ru.vstu.medsim.economy.domain.TeamProblemState;
+import ru.vstu.medsim.kanban.KanbanService;
 import ru.vstu.medsim.player.domain.GameSession;
 import ru.vstu.medsim.player.domain.GameSessionStatus;
 import ru.vstu.medsim.player.domain.Player;
@@ -14,6 +16,7 @@ import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.domain.SessionStageSetting;
 import ru.vstu.medsim.session.domain.SessionTeam;
+import ru.vstu.medsim.session.domain.StageInteractionMode;
 import ru.vstu.medsim.session.domain.TeamInventoryItem;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
@@ -77,8 +80,6 @@ public class GameSessionCommandService {
             "Пластыри"
     );
 
-    private static final int MAX_UNIQUE_TEAM_ROLE_COUNT = GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.size() + GameRoleCatalog.EXECUTOR_ROLES.size();
-
     private final GameSessionQueryService gameSessionQueryService;
     private final GameSessionRepository gameSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
@@ -88,6 +89,7 @@ public class GameSessionCommandService {
     private final TeamInventoryItemRepository teamInventoryItemRepository;
     private final TeamInventoryCatalog teamInventoryCatalog;
     private final SessionEconomyService sessionEconomyService;
+    private final KanbanService kanbanService;
 
     public GameSessionCommandService(
             GameSessionQueryService gameSessionQueryService,
@@ -98,7 +100,8 @@ public class GameSessionCommandService {
             SessionTeamRepository sessionTeamRepository,
             TeamInventoryItemRepository teamInventoryItemRepository,
             TeamInventoryCatalog teamInventoryCatalog,
-            SessionEconomyService sessionEconomyService
+            SessionEconomyService sessionEconomyService,
+            KanbanService kanbanService
     ) {
         this.gameSessionQueryService = gameSessionQueryService;
         this.gameSessionRepository = gameSessionRepository;
@@ -109,6 +112,7 @@ public class GameSessionCommandService {
         this.teamInventoryItemRepository = teamInventoryItemRepository;
         this.teamInventoryCatalog = teamInventoryCatalog;
         this.sessionEconomyService = sessionEconomyService;
+        this.kanbanService = kanbanService;
     }
 
     @Transactional
@@ -126,7 +130,13 @@ public class GameSessionCommandService {
                         .toList()
         );
         initializeTeamInventory(teams);
-        sessionEconomyService.initializeForSession(session, teams, request.startingBudget(), request.stageTimeUnits());
+        List<TeamProblemState> problemStates = sessionEconomyService.initializeForSession(
+                session,
+                teams,
+                request.startingBudget(),
+                request.stageTimeUnits()
+        );
+        kanbanService.initializeCardsForProblemStates(problemStates);
 
         return toSummary(session);
     }
@@ -193,6 +203,17 @@ public class GameSessionCommandService {
         SessionParticipant participant = sessionParticipantRepository
                 .findByIdAndGameSessionId(participantId, session.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Участник не найден."));
+        if (request.teamId() == null) {
+            boolean teamChanged = participant.getTeam() != null;
+            participant.assignTeam(null);
+
+            if (teamChanged) {
+                clearRolesForParticipants(sessionParticipantRepository.findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId()));
+            }
+
+            return gameSessionQueryService.getParticipants(sessionCode);
+        }
+
         SessionTeam team = sessionTeamRepository.findByIdAndGameSessionId(request.teamId(), session.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Команда не найдена."));
 
@@ -258,7 +279,7 @@ public class GameSessionCommandService {
                     .filter(participant -> participant.getTeam() != null && participant.getTeam().getId().equals(team.getId()))
                     .toList();
 
-            validateTeamRoleAssignment(team, teamParticipants);
+            validateTeamHasRequiredLeadershipCapacity(team, teamParticipants);
             assignRolesForTeam(team, teamParticipants);
         }
 
@@ -291,6 +312,15 @@ public class GameSessionCommandService {
     public GameSessionParticipantsResponse selectRuntimeStage(String sessionCode, SessionRuntimeStageRequest request) {
         GameSession session = getRuntimeEditableSessionOrThrow(sessionCode);
         SessionStageSetting stage = getStageOrThrow(session, request.stageNumber());
+        SessionStageSetting previousStage = session.getActiveStageNumber() != null
+                ? getStageOrThrow(session, session.getActiveStageNumber())
+                : null;
+
+        if (previousStage != null
+                && !previousStage.getStageNumber().equals(stage.getStageNumber())
+                && previousStage.getInteractionMode() == StageInteractionMode.CHAT_AND_KANBAN) {
+            sessionEconomyService.settleStageForSession(session, previousStage.getStageNumber());
+        }
 
         try {
             session.selectStage(stage.getStageNumber(), stage.getDurationMinutes());
@@ -402,6 +432,13 @@ public class GameSessionCommandService {
     @Transactional
     public GameSessionParticipantsResponse finishSession(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+        SessionStageSetting activeStage = session.getActiveStageNumber() != null
+                ? getStageOrThrow(session, session.getActiveStageNumber())
+                : null;
+
+        if (activeStage != null && activeStage.getInteractionMode() == StageInteractionMode.CHAT_AND_KANBAN) {
+            sessionEconomyService.settleStageForSession(session, activeStage.getStageNumber());
+        }
 
         try {
             session.finish();
@@ -506,18 +543,11 @@ public class GameSessionCommandService {
     }
 
 
-    private void validateTeamRoleAssignment(SessionTeam team, List<SessionParticipant> teamParticipants) {
+    private void validateTeamHasRequiredLeadershipCapacity(SessionTeam team, List<SessionParticipant> teamParticipants) {
         if (teamParticipants.size() < GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.size()) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "В команде '%s' недостаточно участников для обязательных руководящих ролей.".formatted(team.getName())
-            );
-        }
-
-        if (teamParticipants.size() > MAX_UNIQUE_TEAM_ROLE_COUNT) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "В команде '%s' слишком много участников для уникального распределения ролей без повторов.".formatted(team.getName())
             );
         }
     }
@@ -544,15 +574,19 @@ public class GameSessionCommandService {
                 .filter(participant -> !leadershipParticipantIds.contains(participant.getId()))
                 .toList();
 
-        List<Assignment> executorAssignments = new ArrayList<>();
-        if (!assignUniqueExecutorRoles(remainingParticipants, 0, new ArrayList<>(GameRoleCatalog.EXECUTOR_ROLES), executorAssignments)) {
-            throw new ResponseStatusException(
-                    HttpStatus.CONFLICT,
-                    "Невозможно назначить уникальные исполнительские роли в команде '%s' без совпадения с реальными должностями.".formatted(team.getName())
-            );
-        }
+        if (remainingParticipants.size() <= GameRoleCatalog.EXECUTOR_ROLES.size()) {
+            List<Assignment> executorAssignments = new ArrayList<>();
+            if (!assignUniqueExecutorRoles(remainingParticipants, 0, new ArrayList<>(GameRoleCatalog.EXECUTOR_ROLES), executorAssignments)) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Невозможно назначить уникальные исполнительские роли в команде '%s' без совпадения с реальными должностями.".formatted(team.getName())
+                );
+            }
 
-        executorAssignments.forEach(assignment -> assignment.participant().assignGameRole(assignment.role()));
+            executorAssignments.forEach(assignment -> assignment.participant().assignGameRole(assignment.role()));
+        } else {
+            assignRepeatingExecutorRoles(remainingParticipants);
+        }
     }
 
     private boolean assignLeadershipRoles(
@@ -585,6 +619,35 @@ public class GameSessionCommandService {
         }
 
         return false;
+    }
+
+    private void assignRepeatingExecutorRoles(List<SessionParticipant> participants) {
+        Map<String, Integer> roleUseCounts = new HashMap<>();
+        GameRoleCatalog.EXECUTOR_ROLES.forEach(role -> roleUseCounts.put(role, 0));
+
+        for (SessionParticipant participant : participants) {
+            List<String> candidateRoles = GameRoleCatalog.EXECUTOR_ROLES.stream()
+                    .filter(role -> !participant.getPlayer().getHospitalPosition().equalsIgnoreCase(role))
+                    .toList();
+
+            if (candidateRoles.isEmpty()) {
+                candidateRoles = GameRoleCatalog.EXECUTOR_ROLES;
+            }
+
+            int minimumUseCount = candidateRoles.stream()
+                    .mapToInt(role -> roleUseCounts.getOrDefault(role, 0))
+                    .min()
+                    .orElse(0);
+
+            List<String> leastUsedRoles = candidateRoles.stream()
+                    .filter(role -> roleUseCounts.getOrDefault(role, 0) == minimumUseCount)
+                    .toList();
+
+            String selectedRole = leastUsedRoles.get(ThreadLocalRandom.current().nextInt(leastUsedRoles.size()));
+
+            participant.assignGameRole(selectedRole);
+            roleUseCounts.computeIfPresent(selectedRole, (role, count) -> count + 1);
+        }
     }
 
     private boolean assignUniqueExecutorRoles(

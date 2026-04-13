@@ -103,6 +103,19 @@ public class TeamEconomyState {
         this.totalBonuses = BigDecimal.ZERO.setScale(2);
     }
 
+    public void spendResources(BigDecimal budgetCost, int timeCost) {
+        this.currentBalance = currentBalance.subtract(budgetCost);
+        this.currentStageTimeUnits = currentStageTimeUnits - timeCost;
+        this.totalExpenses = totalExpenses.add(budgetCost);
+    }
+
+    public void applyStageSettlement(BigDecimal income, BigDecimal penalties, BigDecimal bonuses) {
+        this.currentBalance = currentBalance.add(income).add(bonuses).subtract(penalties);
+        this.totalIncome = totalIncome.add(income);
+        this.totalPenalties = totalPenalties.add(penalties);
+        this.totalBonuses = totalBonuses.add(bonuses);
+    }
+
     public Long getId() {
         return id;
     }

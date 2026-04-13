@@ -1,6 +1,7 @@
 package ru.vstu.medsim.economy;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -9,26 +10,34 @@ import ru.vstu.medsim.economy.domain.ClinicRoomTemplate;
 import ru.vstu.medsim.economy.domain.ProblemSeverity;
 import ru.vstu.medsim.economy.domain.SessionEconomySettings;
 import ru.vstu.medsim.economy.domain.SessionProblemStatus;
+import ru.vstu.medsim.economy.domain.TeamEconomyEvent;
+import ru.vstu.medsim.economy.domain.TeamEconomyEventType;
 import ru.vstu.medsim.economy.domain.TeamEconomyState;
 import ru.vstu.medsim.economy.domain.TeamProblemState;
 import ru.vstu.medsim.economy.domain.TeamRoomState;
 import ru.vstu.medsim.economy.dto.GameSessionEconomyResponse;
 import ru.vstu.medsim.economy.dto.SessionEconomySettingsItem;
+import ru.vstu.medsim.economy.dto.TeamEconomyEventItem;
 import ru.vstu.medsim.economy.dto.TeamEconomyItem;
 import ru.vstu.medsim.economy.dto.TeamProblemEconomyItem;
 import ru.vstu.medsim.economy.dto.TeamRoomEconomyItem;
 import ru.vstu.medsim.economy.repository.ClinicRoomProblemTemplateRepository;
 import ru.vstu.medsim.economy.repository.ClinicRoomTemplateRepository;
 import ru.vstu.medsim.economy.repository.SessionEconomySettingsRepository;
+import ru.vstu.medsim.economy.repository.TeamEconomyEventRepository;
 import ru.vstu.medsim.economy.repository.TeamEconomyStateRepository;
 import ru.vstu.medsim.economy.repository.TeamProblemStateRepository;
 import ru.vstu.medsim.economy.repository.TeamRoomStateRepository;
+import ru.vstu.medsim.kanban.domain.TeamKanbanCard;
 import ru.vstu.medsim.player.domain.GameSession;
 import ru.vstu.medsim.player.domain.GameSessionStatus;
+import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.session.GameSessionQueryService;
 import ru.vstu.medsim.session.domain.SessionTeam;
+import ru.vstu.medsim.session.domain.TeamInventoryItem;
 import ru.vstu.medsim.session.dto.SessionEconomySettingsUpdateRequest;
 import ru.vstu.medsim.session.repository.SessionTeamRepository;
+import ru.vstu.medsim.session.repository.TeamInventoryItemRepository;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -52,8 +61,10 @@ public class SessionEconomyService {
     private final ClinicRoomProblemTemplateRepository clinicRoomProblemTemplateRepository;
     private final SessionEconomySettingsRepository sessionEconomySettingsRepository;
     private final TeamEconomyStateRepository teamEconomyStateRepository;
+    private final TeamEconomyEventRepository teamEconomyEventRepository;
     private final TeamRoomStateRepository teamRoomStateRepository;
     private final TeamProblemStateRepository teamProblemStateRepository;
+    private final TeamInventoryItemRepository teamInventoryItemRepository;
 
     public SessionEconomyService(
             GameSessionQueryService gameSessionQueryService,
@@ -62,8 +73,10 @@ public class SessionEconomyService {
             ClinicRoomProblemTemplateRepository clinicRoomProblemTemplateRepository,
             SessionEconomySettingsRepository sessionEconomySettingsRepository,
             TeamEconomyStateRepository teamEconomyStateRepository,
+            TeamEconomyEventRepository teamEconomyEventRepository,
             TeamRoomStateRepository teamRoomStateRepository,
-            TeamProblemStateRepository teamProblemStateRepository
+            TeamProblemStateRepository teamProblemStateRepository,
+            TeamInventoryItemRepository teamInventoryItemRepository
     ) {
         this.gameSessionQueryService = gameSessionQueryService;
         this.sessionTeamRepository = sessionTeamRepository;
@@ -71,12 +84,14 @@ public class SessionEconomyService {
         this.clinicRoomProblemTemplateRepository = clinicRoomProblemTemplateRepository;
         this.sessionEconomySettingsRepository = sessionEconomySettingsRepository;
         this.teamEconomyStateRepository = teamEconomyStateRepository;
+        this.teamEconomyEventRepository = teamEconomyEventRepository;
         this.teamRoomStateRepository = teamRoomStateRepository;
         this.teamProblemStateRepository = teamProblemStateRepository;
+        this.teamInventoryItemRepository = teamInventoryItemRepository;
     }
 
     @Transactional
-    public void initializeForSession(
+    public List<TeamProblemState> initializeForSession(
             GameSession session,
             List<SessionTeam> teams,
             BigDecimal startingBudget,
@@ -90,7 +105,7 @@ public class SessionEconomyService {
         );
 
         if (teams.isEmpty()) {
-            return;
+            return List.of();
         }
 
         List<ClinicRoomTemplate> roomTemplates = clinicRoomTemplateRepository.findAllByOrderBySortOrderAscIdAsc();
@@ -126,7 +141,8 @@ public class SessionEconomyService {
             }
         }
 
-        teamProblemStateRepository.saveAll(createdProblemStates);
+        List<TeamProblemState> savedProblemStates = teamProblemStateRepository.saveAll(createdProblemStates);
+        return savedProblemStates;
     }
 
     @Transactional
@@ -136,6 +152,90 @@ public class SessionEconomyService {
 
         teamEconomyStateRepository.findAllByTeamGameSessionIdOrderByTeamSortOrderAscIdAsc(gameSessionId)
                 .forEach(teamEconomyState -> teamEconomyState.resetStageTime(settings.getStageTimeUnits()));
+    }
+
+    @Transactional
+    public void spendResourcesForTask(SessionParticipant actor, TeamKanbanCard card) {
+        if (card.getResourcesSpentAt() != null) {
+            return;
+        }
+
+        ClinicRoomProblemTemplate problemTemplate = card.getProblemState().getProblemTemplate();
+        BigDecimal budgetCost = problemTemplate.getBudgetCost();
+        int timeCost = problemTemplate.getTimeCost();
+        String requiredItemName = problemTemplate.getRequiredItemName();
+        int requiredItemQuantity = problemTemplate.getRequiredItemQuantity() != null
+                ? problemTemplate.getRequiredItemQuantity()
+                : 0;
+
+        TeamEconomyState teamState = teamEconomyStateRepository.findByTeamId(card.getTeam().getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Экономика команды не найдена."));
+
+        if (teamState.getCurrentBalance().compareTo(budgetCost) < 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "У команды недостаточно бюджета для старта задачи.");
+        }
+
+        if (teamState.getCurrentStageTimeUnits() < timeCost) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "У команды недостаточно времени этапа для старта задачи.");
+        }
+
+        TeamInventoryItem inventoryItem = null;
+        if (requiredItemName != null && !requiredItemName.isBlank() && requiredItemQuantity > 0) {
+            inventoryItem = teamInventoryItemRepository
+                    .findByTeamIdAndItemNameIgnoreCase(card.getTeam().getId(), requiredItemName)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "На складе команды нет нужного предмета: %s.".formatted(requiredItemName)
+                    ));
+
+            if (inventoryItem.getQuantity() < requiredItemQuantity) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Недостаточно предметов '%s' на складе команды.".formatted(requiredItemName)
+                );
+            }
+        }
+
+        teamState.spendResources(budgetCost, timeCost);
+        if (inventoryItem != null) {
+            inventoryItem.consume(requiredItemQuantity);
+        }
+        card.markResourcesSpent();
+
+        teamEconomyEventRepository.save(new TeamEconomyEvent(
+                card.getTeam(),
+                actor,
+                card,
+                TeamEconomyEventType.TASK_RESOURCES_SPENT,
+                problemTemplate.getStageNumber(),
+                budgetCost.negate(),
+                -timeCost,
+                inventoryItem != null ? inventoryItem.getItemName() : null,
+                inventoryItem != null ? -requiredItemQuantity : 0,
+                "Старт задачи: %s. Списано бюджет %.2f и время %d."
+                        .formatted(problemTemplate.getTitle(), budgetCost, timeCost)
+        ));
+    }
+
+    @Transactional
+    public void settleStageForSession(GameSession session, Integer stageNumber) {
+        if (stageNumber == null) {
+            return;
+        }
+
+        List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId());
+
+        for (SessionTeam team : teams) {
+            if (teamEconomyEventRepository.existsByTeamIdAndStageNumberAndEventType(
+                    team.getId(),
+                    stageNumber,
+                    TeamEconomyEventType.STAGE_SETTLED
+            )) {
+                continue;
+            }
+
+            settleStageForTeam(team, stageNumber);
+        }
     }
 
     @Transactional
@@ -218,6 +318,86 @@ public class SessionEconomyService {
         );
     }
 
+    @Transactional(readOnly = true)
+    public TeamEconomyItem getTeamEconomy(SessionTeam team) {
+        TeamEconomyState teamState = teamEconomyStateRepository.findByTeamId(team.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Экономика команды '%s' не найдена.".formatted(team.getName())));
+
+        List<TeamRoomState> roomStates = teamRoomStateRepository.findAllByTeamIdInOrderByTeamSortOrderAscClinicRoomSortOrderAscIdAsc(
+                List.of(team.getId())
+        );
+        List<Long> teamRoomStateIds = roomStates.stream().map(TeamRoomState::getId).toList();
+        List<TeamProblemState> problemStates = teamRoomStateIds.isEmpty()
+                ? List.of()
+                : teamProblemStateRepository.findAllByTeamRoomStateIdInOrderByTeamRoomStateClinicRoomSortOrderAscProblemTemplateProblemNumberAscIdAsc(teamRoomStateIds);
+
+        Map<Long, List<TeamProblemState>> problemStatesByRoomStateId = problemStates.stream()
+                .collect(Collectors.groupingBy(
+                        problemState -> problemState.getTeamRoomState().getId(),
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+
+        return toTeamItem(team, teamState, roomStates, problemStatesByRoomStateId);
+    }
+
+    private void settleStageForTeam(SessionTeam team, Integer stageNumber) {
+        TeamEconomyState state = teamEconomyStateRepository.findByTeamId(team.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Экономика команды не найдена."));
+        List<TeamRoomState> roomStates = teamRoomStateRepository.findAllByTeamIdInOrderByTeamSortOrderAscClinicRoomSortOrderAscIdAsc(
+                List.of(team.getId())
+        );
+        List<Long> teamRoomStateIds = roomStates.stream().map(TeamRoomState::getId).toList();
+        List<TeamProblemState> problemStates = teamRoomStateIds.isEmpty()
+                ? List.of()
+                : teamProblemStateRepository.findAllByTeamRoomStateIdInOrderByTeamRoomStateClinicRoomSortOrderAscProblemTemplateProblemNumberAscIdAsc(teamRoomStateIds);
+
+        Map<Long, List<TeamProblemState>> problemStatesByRoomStateId = problemStates.stream()
+                .collect(Collectors.groupingBy(
+                        problemState -> problemState.getTeamRoomState().getId(),
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+
+        BigDecimal income = roomStates.stream()
+                .map(roomState -> roomState.getClinicRoom().getBaseIncome().multiply(
+                        resolveRoomStateCoefficient(problemStatesByRoomStateId.getOrDefault(roomState.getId(), List.of()), stageNumber)
+                ))
+                .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        BigDecimal penalties = problemStates.stream()
+                .filter(problemState -> isReleasedByStage(problemState, stageNumber))
+                .filter(problemState -> problemState.getStatus() != SessionProblemStatus.RESOLVED)
+                .map(problemState -> problemState.getProblemTemplate().getIgnorePenalty())
+                .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        List<TeamProblemState> currentStageProblems = problemStates.stream()
+                .filter(problemState -> problemState.getProblemTemplate().getStageNumber().equals(stageNumber))
+                .toList();
+
+        BigDecimal bonus = !currentStageProblems.isEmpty() && currentStageProblems.stream()
+                .allMatch(problemState -> problemState.getStatus() == SessionProblemStatus.RESOLVED)
+                ? new BigDecimal("2.00")
+                : BigDecimal.ZERO.setScale(2);
+
+        state.applyStageSettlement(income, penalties, bonus);
+        teamEconomyEventRepository.save(new TeamEconomyEvent(
+                team,
+                null,
+                null,
+                TeamEconomyEventType.STAGE_SETTLED,
+                stageNumber,
+                income.add(bonus).subtract(penalties),
+                0,
+                null,
+                0,
+                "Итог этапа %d: доход %.2f, штрафы %.2f, бонус %.2f."
+                        .formatted(stageNumber, income, penalties, bonus)
+        ));
+    }
+
     private TeamEconomyItem toTeamItem(
             SessionTeam team,
             TeamEconomyState state,
@@ -241,7 +421,11 @@ public class SessionEconomyService {
                 state.getTotalExpenses(),
                 state.getTotalPenalties(),
                 state.getTotalBonuses(),
-                roomItems
+                roomItems,
+                teamEconomyEventRepository.findRecentForTeam(team.getId(), PageRequest.of(0, 8))
+                        .stream()
+                        .map(this::toEconomyEventItem)
+                        .toList()
         );
     }
 
@@ -263,8 +447,13 @@ public class SessionEconomyService {
                 .map(problemState -> new TeamProblemEconomyItem(
                         problemState.getId(),
                         problemState.getProblemTemplate().getProblemNumber(),
+                        problemState.getProblemTemplate().getStageNumber(),
                         problemState.getProblemTemplate().getTitle(),
                         problemState.getProblemTemplate().getSeverity().name(),
+                        problemState.getProblemTemplate().getBudgetCost(),
+                        problemState.getProblemTemplate().getTimeCost(),
+                        problemState.getProblemTemplate().getRequiredItemName(),
+                        problemState.getProblemTemplate().getRequiredItemQuantity(),
                         problemState.getProblemTemplate().getIgnorePenalty(),
                         problemState.getProblemTemplate().getSeverity().getPenaltyWeight(),
                         problemState.getStatus().name()
@@ -280,6 +469,35 @@ public class SessionEconomyService {
                 worstSeverity != null ? worstSeverity.name() : null,
                 stateCoefficient,
                 problemItems
+        );
+    }
+
+    private BigDecimal resolveRoomStateCoefficient(List<TeamProblemState> problemStates, Integer stageNumber) {
+        return problemStates.stream()
+                .filter(problemState -> isReleasedByStage(problemState, stageNumber))
+                .filter(problemState -> problemState.getStatus() != SessionProblemStatus.RESOLVED)
+                .map(problemState -> problemState.getProblemTemplate().getSeverity())
+                .max(Comparator.comparingInt(Enum::ordinal))
+                .map(ProblemSeverity::getStateCoefficient)
+                .orElse(BigDecimal.ONE.setScale(2));
+    }
+
+    private boolean isReleasedByStage(TeamProblemState problemState, Integer stageNumber) {
+        Integer problemStageNumber = problemState.getProblemTemplate().getStageNumber();
+        return stageNumber == null || problemStageNumber == null || problemStageNumber <= stageNumber;
+    }
+
+    private TeamEconomyEventItem toEconomyEventItem(TeamEconomyEvent event) {
+        return new TeamEconomyEventItem(
+                event.getId(),
+                event.getEventType().name(),
+                event.getStageNumber(),
+                event.getAmountDelta(),
+                event.getTimeDelta(),
+                event.getItemName(),
+                event.getItemQuantityDelta(),
+                event.getMessage(),
+                event.getCreatedAt()
         );
     }
 

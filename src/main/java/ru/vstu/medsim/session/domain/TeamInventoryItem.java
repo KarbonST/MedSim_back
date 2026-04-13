@@ -42,6 +42,10 @@ public class TeamInventoryItem {
         this.quantity = quantity;
     }
 
+    public void consume(int quantity) {
+        this.quantity = this.quantity - quantity;
+    }
+
     @PrePersist
     void prePersist() {
         if (createdAt == null) {

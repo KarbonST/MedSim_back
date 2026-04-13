@@ -49,6 +49,13 @@ public class TeamProblemState {
         this.status = status;
     }
 
+    public void updateStatus(SessionProblemStatus status) {
+        this.status = status;
+        this.resolvedAt = status == SessionProblemStatus.RESOLVED
+                ? LocalDateTime.now()
+                : null;
+    }
+
     @PrePersist
     void prePersist() {
         if (createdAt == null) {

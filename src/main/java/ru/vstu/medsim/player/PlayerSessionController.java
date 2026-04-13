@@ -2,12 +2,14 @@ package ru.vstu.medsim.player;
 
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.vstu.medsim.player.dto.AvailablePlayerSessionResponse;
+import ru.vstu.medsim.player.dto.PlayerKanbanCardStatusUpdateRequest;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinRequest;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinResponse;
 import ru.vstu.medsim.player.dto.PlayerTeamWorkspaceResponse;
@@ -40,5 +42,15 @@ public class PlayerSessionController {
             @PathVariable Long participantId
     ) {
         return playerSessionService.getWorkspace(sessionCode, participantId);
+    }
+
+    @PatchMapping("/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status")
+    public PlayerTeamWorkspaceResponse updateKanbanCardStatus(
+            @PathVariable String sessionCode,
+            @PathVariable Long participantId,
+            @PathVariable Long cardId,
+            @Valid @RequestBody PlayerKanbanCardStatusUpdateRequest request
+    ) {
+        return playerSessionService.updateKanbanCardStatus(sessionCode, participantId, cardId, request);
     }
 }

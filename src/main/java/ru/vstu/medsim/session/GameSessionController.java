@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.vstu.medsim.economy.SessionEconomyService;
 import ru.vstu.medsim.economy.dto.GameSessionEconomyResponse;
+import ru.vstu.medsim.kanban.KanbanService;
+import ru.vstu.medsim.kanban.dto.GameSessionKanbanResponse;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
@@ -34,15 +36,18 @@ public class GameSessionController {
     private final GameSessionQueryService gameSessionQueryService;
     private final GameSessionCommandService gameSessionCommandService;
     private final SessionEconomyService sessionEconomyService;
+    private final KanbanService kanbanService;
 
     public GameSessionController(
             GameSessionQueryService gameSessionQueryService,
             GameSessionCommandService gameSessionCommandService,
-            SessionEconomyService sessionEconomyService
+            SessionEconomyService sessionEconomyService,
+            KanbanService kanbanService
     ) {
         this.gameSessionQueryService = gameSessionQueryService;
         this.gameSessionCommandService = gameSessionCommandService;
         this.sessionEconomyService = sessionEconomyService;
+        this.kanbanService = kanbanService;
     }
 
     @GetMapping
@@ -63,6 +68,11 @@ public class GameSessionController {
     @GetMapping("/{sessionCode}/economy")
     public GameSessionEconomyResponse getEconomy(@PathVariable String sessionCode) {
         return sessionEconomyService.getEconomyOverview(sessionCode);
+    }
+
+    @GetMapping("/{sessionCode}/kanban")
+    public GameSessionKanbanResponse getKanban(@PathVariable String sessionCode) {
+        return kanbanService.getSessionBoards(sessionCode);
     }
 
     @PutMapping("/{sessionCode}/economy/settings")
