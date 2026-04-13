@@ -275,7 +275,7 @@ class SessionEconomyIntegrationTest {
                                         Map.of(
                                                 "stageNumber", 1,
                                                 "durationMinutes", 10,
-                                                "interactionMode", "CHAT_ONLY"
+                                                "interactionMode", "CHAT_WITH_PROBLEMS"
                                         ),
                                         Map.of(
                                                 "stageNumber", 2,

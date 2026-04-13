@@ -358,7 +358,8 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].roomName").value("Рентген"))
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].problems.length()").value(3))
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].problems[0].stageNumber").value(1))
-                .andExpect(jsonPath("$.teamKanbanBoard").value(nullValue()));
+                .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(10))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].stageNumber").value(1));
     }
 
     @Test
@@ -371,7 +372,7 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.teams.length()").value(2))
                 .andExpect(jsonPath("$.teams[0].teamId").value(firstTeamId(sessionCode)))
-                .andExpect(jsonPath("$.teams[0].teamKanbanBoard.cards.length()").value(0));
+                .andExpect(jsonPath("$.teams[0].teamKanbanBoard.cards.length()").value(10));
     }
 
     @Test
@@ -1131,7 +1132,7 @@ class PlayerSessionControllerIntegrationTest {
                         Map.of(
                                 "stageNumber", 1,
                                 "durationMinutes", 12,
-                                "interactionMode", "CHAT_ONLY"
+                                "interactionMode", "CHAT_WITH_PROBLEMS"
                         ),
                         Map.of(
                                 "stageNumber", 2,
@@ -1464,7 +1465,7 @@ class PlayerSessionControllerIntegrationTest {
                         Map.of(
                                 "stageNumber", 1,
                                 "durationMinutes", 12,
-                                "interactionMode", "CHAT_ONLY"
+                                "interactionMode", "CHAT_WITH_PROBLEMS"
                         )
                 )
         );
@@ -1505,7 +1506,7 @@ class PlayerSessionControllerIntegrationTest {
                         Map.of(
                                 "stageNumber", 1,
                                 "durationMinutes", 12,
-                                "interactionMode", "CHAT_ONLY"
+                                "interactionMode", "CHAT_WITH_PROBLEMS"
                         ),
                         Map.of(
                                 "stageNumber", 2,
