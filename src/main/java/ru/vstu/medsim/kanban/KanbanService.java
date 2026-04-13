@@ -28,7 +28,9 @@ import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.player.dto.PlayerKanbanCardStatusUpdateRequest;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.GameSessionQueryService;
+import ru.vstu.medsim.session.domain.SessionStageSetting;
 import ru.vstu.medsim.session.domain.SessionTeam;
+import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
 import ru.vstu.medsim.session.repository.SessionTeamRepository;
 
 import java.util.List;
@@ -70,6 +72,7 @@ public class KanbanService {
     private final GameSessionQueryService gameSessionQueryService;
     private final SessionTeamRepository sessionTeamRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
+    private final SessionStageSettingRepository sessionStageSettingRepository;
 
     public KanbanService(
             TeamProblemStateRepository teamProblemStateRepository,
@@ -78,7 +81,8 @@ public class KanbanService {
             SessionEconomyService sessionEconomyService,
             GameSessionQueryService gameSessionQueryService,
             SessionTeamRepository sessionTeamRepository,
-            SessionParticipantRepository sessionParticipantRepository
+            SessionParticipantRepository sessionParticipantRepository,
+            SessionStageSettingRepository sessionStageSettingRepository
     ) {
         this.teamProblemStateRepository = teamProblemStateRepository;
         this.teamKanbanCardRepository = teamKanbanCardRepository;
@@ -87,6 +91,7 @@ public class KanbanService {
         this.gameSessionQueryService = gameSessionQueryService;
         this.sessionTeamRepository = sessionTeamRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
+        this.sessionStageSettingRepository = sessionStageSettingRepository;
     }
 
     @Transactional
@@ -141,6 +146,7 @@ public class KanbanService {
     public GameSessionKanbanResponse getSessionBoards(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
         List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId());
+        Integer releasedStageNumber = resolveReleasedStageNumber(session);
 
         return new GameSessionKanbanResponse(
                 session.getId(),
@@ -151,7 +157,7 @@ public class KanbanService {
                         .map(team -> new TeamKanbanOverviewItem(
                                 team.getId(),
                                 team.getName(),
-                                getTeamBoard(team, session.getActiveStageNumber())
+                                getTeamBoard(team, releasedStageNumber)
                         ))
                         .toList()
         );
@@ -652,6 +658,23 @@ public class KanbanService {
 
         Integer cardStageNumber = card.getProblemState().getProblemTemplate().getStageNumber();
         return cardStageNumber == null || cardStageNumber <= activeStageNumber;
+    }
+
+    private Integer resolveReleasedStageNumber(GameSession session) {
+        if (session.getActiveStageNumber() == null) {
+            return null;
+        }
+
+        boolean problemWorkflowAvailable = sessionStageSettingRepository
+                .findAllByGameSessionIdOrderByStageNumberAsc(session.getId())
+                .stream()
+                .filter(stage -> stage.getStageNumber().equals(session.getActiveStageNumber()))
+                .findFirst()
+                .map(SessionStageSetting::getInteractionMode)
+                .map(interactionMode -> interactionMode.hasProblemWorkflow())
+                .orElse(false);
+
+        return problemWorkflowAvailable ? session.getActiveStageNumber() : 0;
     }
 
     private SessionProblemStatus toProblemStatus(KanbanCardStatus status) {

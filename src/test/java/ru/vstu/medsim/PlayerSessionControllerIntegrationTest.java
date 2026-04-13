@@ -357,8 +357,8 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(jsonPath("$.teamEconomy.rooms.length()").value(10))
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].roomName").value("Рентген"))
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].problems.length()").value(3))
-                .andExpect(jsonPath("$.teamEconomy.rooms[0].problems[0].stageNumber").value(2))
-                .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(0));
+                .andExpect(jsonPath("$.teamEconomy.rooms[0].problems[0].stageNumber").value(1))
+                .andExpect(jsonPath("$.teamKanbanBoard").value(nullValue()));
     }
 
     @Test
@@ -372,6 +372,49 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(jsonPath("$.teams.length()").value(2))
                 .andExpect(jsonPath("$.teams[0].teamId").value(firstTeamId(sessionCode)))
                 .andExpect(jsonPath("$.teams[0].teamKanbanBoard.cards.length()").value(0));
+    }
+
+    @Test
+    void shouldExposeChatProblemRoundWithoutKanbanColumnsAndSettleEconomy() throws Exception {
+        String sessionCode = createSession("Чат с проблемами", 2);
+        prepareStartedTwoTeamSessionWithChatProblemRound(sessionCode);
+        Long chiefDoctorId = participantIdByName(sessionCode, "Анна Петрова");
+        Long cardId = firstKanbanCardId(sessionCode, firstTeamId(sessionCode));
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, chiefDoctorId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionRuntime.activeStageInteractionMode").value("CHAT_WITH_PROBLEMS"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(10))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].stageNumber").value(1))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].priority").value(nullValue()));
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "status", "ASSIGNED",
+                                "priority", "HIGH",
+                                "responsibleDepartment", "ENGINEERING"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("ASSIGNED"));
+
+        selectCurrentStage(sessionCode, 2);
+
+        Integer settledTeams = jdbcTemplate.queryForObject(
+                """
+                        SELECT COUNT(*)
+                        FROM team_economy_events tee
+                        JOIN session_teams st ON st.id = tee.team_id
+                        JOIN game_sessions gs ON gs.id = st.game_session_id
+                        WHERE gs.code = ?
+                          AND tee.event_type = 'STAGE_SETTLED'
+                          AND tee.stage_number = 1
+                        """,
+                Integer.class,
+                sessionCode
+        );
+
+        assertThat(settledTeams).isEqualTo(2);
     }
 
     @Test
@@ -1350,7 +1393,19 @@ class PlayerSessionControllerIntegrationTest {
         prepareStartedTwoTeamSession(sessionCode, true);
     }
 
+    private void prepareStartedTwoTeamSessionWithChatProblemRound(String sessionCode) throws Exception {
+        prepareStartedTwoTeamSession(sessionCode, false, true);
+    }
+
     private void prepareStartedTwoTeamSession(String sessionCode, boolean withKanbanStage) throws Exception {
+        prepareStartedTwoTeamSession(sessionCode, withKanbanStage, false);
+    }
+
+    private void prepareStartedTwoTeamSession(
+            String sessionCode,
+            boolean withKanbanStage,
+            boolean withChatProblemRound
+    ) throws Exception {
         joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
         joinPlayer("Иван Сидоров", "Главный инженер", sessionCode);
         joinPlayer("Павел Орлов", "Главный врач", sessionCode);
@@ -1390,7 +1445,9 @@ class PlayerSessionControllerIntegrationTest {
             assignManualRole(sessionCode, participantIdByName(sessionCode, "Мария Белова"), "Сестра поликлинического отделения");
         }
 
-        if (withKanbanStage) {
+        if (withChatProblemRound) {
+            saveChatProblemStages(sessionCode);
+        } else if (withKanbanStage) {
             saveKanbanStages(sessionCode);
         } else {
             saveDefaultStages(sessionCode);
@@ -1408,6 +1465,29 @@ class PlayerSessionControllerIntegrationTest {
                                 "stageNumber", 1,
                                 "durationMinutes", 12,
                                 "interactionMode", "CHAT_ONLY"
+                        )
+                )
+        );
+
+        mockMvc.perform(put("/api/game-sessions/{sessionCode}/stages", sessionCode)
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk());
+    }
+
+    private void saveChatProblemStages(String sessionCode) throws Exception {
+        var request = Map.of(
+                "stages", List.of(
+                        Map.of(
+                                "stageNumber", 1,
+                                "durationMinutes", 12,
+                                "interactionMode", "CHAT_WITH_PROBLEMS"
+                        ),
+                        Map.of(
+                                "stageNumber", 2,
+                                "durationMinutes", 12,
+                                "interactionMode", "CHAT_AND_KANBAN"
                         )
                 )
         );

@@ -6,6 +6,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import ru.vstu.medsim.economy.SessionEconomyService;
 import ru.vstu.medsim.kanban.KanbanService;
+import ru.vstu.medsim.kanban.dto.TeamKanbanBoardItem;
 import ru.vstu.medsim.player.domain.GameSession;
 import ru.vstu.medsim.player.domain.GameSessionStatus;
 import ru.vstu.medsim.player.domain.Player;
@@ -22,7 +23,7 @@ import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.GameRoleCatalog;
 import ru.vstu.medsim.session.SessionRuntimeSnapshotService;
-import ru.vstu.medsim.session.domain.StageInteractionMode;
+import ru.vstu.medsim.session.domain.SessionStageSetting;
 import ru.vstu.medsim.session.domain.TeamInventoryItem;
 import ru.vstu.medsim.session.dto.SessionStageSettingItem;
 import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
@@ -195,7 +196,7 @@ public class PlayerSessionService {
                         ))
                         .toList();
 
-        List<ru.vstu.medsim.session.domain.SessionStageSetting> stageEntities = sessionStageSettingRepository
+        List<SessionStageSetting> stageEntities = sessionStageSettingRepository
                 .findAllByGameSessionIdOrderByStageNumberAsc(session.getId());
 
         List<SessionStageSettingItem> stages = stageEntities.stream()
@@ -214,6 +215,7 @@ public class PlayerSessionService {
                 : teamInventoryItemRepository.findAllByTeamIdOrderByItemNameAsc(participant.getTeam().getId()).stream()
                 .map(this::toInventoryItem)
                 .toList();
+        TeamKanbanBoardItem teamKanbanBoard = resolveProblemWorkflowBoard(session, participant, stageEntities);
 
         return new PlayerTeamWorkspaceResponse(
                 participant.getId(),
@@ -233,9 +235,29 @@ public class PlayerSessionService {
                 inventoryVisible,
                 teamInventory,
                 participant.getTeam() != null ? kanbanService.getNotificationsForParticipant(participant) : List.of(),
-                participant.getTeam() != null ? kanbanService.getTeamBoard(participant.getTeam(), session.getActiveStageNumber()) : null,
+                teamKanbanBoard,
                 participant.getTeam() != null ? sessionEconomyService.getTeamEconomy(participant.getTeam()) : null
         );
+    }
+
+    private TeamKanbanBoardItem resolveProblemWorkflowBoard(
+            GameSession session,
+            SessionParticipant participant,
+            List<SessionStageSetting> stageEntities
+    ) {
+        if (participant.getTeam() == null || session.getActiveStageNumber() == null) {
+            return null;
+        }
+
+        boolean problemWorkflowAvailable = stageEntities.stream()
+                .filter(stage -> stage.getStageNumber().equals(session.getActiveStageNumber()))
+                .findFirst()
+                .map(stage -> stage.getInteractionMode().hasProblemWorkflow())
+                .orElse(false);
+
+        return problemWorkflowAvailable
+                ? kanbanService.getTeamBoard(participant.getTeam(), session.getActiveStageNumber())
+                : null;
     }
 
     private void ensureKanbanIsAvailableForActiveStage(GameSession session) {
@@ -243,15 +265,15 @@ public class PlayerSessionService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Сначала ведущий должен выбрать активный этап игры.");
         }
 
-        ru.vstu.medsim.session.domain.SessionStageSetting activeStage = sessionStageSettingRepository
+        SessionStageSetting activeStage = sessionStageSettingRepository
                 .findAllByGameSessionIdOrderByStageNumberAsc(session.getId())
                 .stream()
                 .filter(stage -> stage.getStageNumber().equals(session.getActiveStageNumber()))
                 .findFirst()
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Активный этап сессии не найден."));
 
-        if (activeStage.getInteractionMode() != StageInteractionMode.CHAT_AND_KANBAN) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Канбан-доска доступна только на этапах 'чат + канбан'.");
+        if (!activeStage.getInteractionMode().hasProblemWorkflow()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Работа с задачами доступна только на этапах с проблемами.");
         }
     }
 

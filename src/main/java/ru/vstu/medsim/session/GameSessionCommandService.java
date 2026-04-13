@@ -16,7 +16,6 @@ import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.domain.SessionStageSetting;
 import ru.vstu.medsim.session.domain.SessionTeam;
-import ru.vstu.medsim.session.domain.StageInteractionMode;
 import ru.vstu.medsim.session.domain.TeamInventoryItem;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
@@ -318,7 +317,7 @@ public class GameSessionCommandService {
 
         if (previousStage != null
                 && !previousStage.getStageNumber().equals(stage.getStageNumber())
-                && previousStage.getInteractionMode() == StageInteractionMode.CHAT_AND_KANBAN) {
+                && previousStage.getInteractionMode().hasProblemWorkflow()) {
             sessionEconomyService.settleStageForSession(session, previousStage.getStageNumber());
         }
 
@@ -436,7 +435,7 @@ public class GameSessionCommandService {
                 ? getStageOrThrow(session, session.getActiveStageNumber())
                 : null;
 
-        if (activeStage != null && activeStage.getInteractionMode() == StageInteractionMode.CHAT_AND_KANBAN) {
+        if (activeStage != null && activeStage.getInteractionMode().hasProblemWorkflow()) {
             sessionEconomyService.settleStageForSession(session, activeStage.getStageNumber());
         }
 
