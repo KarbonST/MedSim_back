@@ -18,6 +18,7 @@ public record TeamEconomyItem(
         BigDecimal totalBonuses,
         List<TeamEconomyReservedItem> reservedItems,
         List<TeamRoomEconomyItem> rooms,
+        List<TeamStageEconomySummaryItem> stageSummaries,
         List<TeamEconomyEventItem> recentEvents
 ) {
 }

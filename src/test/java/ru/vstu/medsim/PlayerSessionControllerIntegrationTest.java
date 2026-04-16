@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.matchesPattern;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
@@ -400,6 +401,13 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("ASSIGNED"));
 
         selectCurrentStage(sessionCode, 2);
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, chiefDoctorId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamEconomy.stageSummaries.length()").value(1))
+                .andExpect(jsonPath("$.teamEconomy.stageSummaries[0].stageNumber").value(1))
+                .andExpect(jsonPath("$.teamEconomy.stageSummaries[0].message").value(containsString("Итог этапа 1")))
+                .andExpect(jsonPath("$.teamEconomy.stageSummaries[0].netAmount").exists());
 
         Integer settledTeams = jdbcTemplate.queryForObject(
                 """

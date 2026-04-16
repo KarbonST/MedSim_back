@@ -13,6 +13,11 @@ public interface TeamEconomyEventRepository extends JpaRepository<TeamEconomyEve
 
     boolean existsByTeamIdAndStageNumberAndEventType(Long teamId, Integer stageNumber, TeamEconomyEventType eventType);
 
+    List<TeamEconomyEvent> findAllByTeamIdAndEventTypeOrderByStageNumberDescCreatedAtDescIdDesc(
+            Long teamId,
+            TeamEconomyEventType eventType
+    );
+
     @Query("""
             select event
             from TeamEconomyEvent event

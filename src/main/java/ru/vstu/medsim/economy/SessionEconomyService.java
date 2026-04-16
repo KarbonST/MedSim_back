@@ -24,6 +24,7 @@ import ru.vstu.medsim.economy.dto.TeamEconomyItem;
 import ru.vstu.medsim.economy.dto.TeamProblemEconomyItem;
 import ru.vstu.medsim.economy.dto.TeamEconomyReservedItem;
 import ru.vstu.medsim.economy.dto.TeamRoomEconomyItem;
+import ru.vstu.medsim.economy.dto.TeamStageEconomySummaryItem;
 import ru.vstu.medsim.economy.repository.ClinicRoomProblemTemplateRepository;
 import ru.vstu.medsim.economy.repository.ClinicRoomTemplateRepository;
 import ru.vstu.medsim.economy.repository.SessionEconomySettingsRepository;
@@ -533,6 +534,13 @@ public class SessionEconomyService {
                 state.getTotalBonuses(),
                 reservedItems,
                 roomItems,
+                teamEconomyEventRepository.findAllByTeamIdAndEventTypeOrderByStageNumberDescCreatedAtDescIdDesc(
+                                team.getId(),
+                                TeamEconomyEventType.STAGE_SETTLED
+                        )
+                        .stream()
+                        .map(this::toStageEconomySummaryItem)
+                        .toList(),
                 teamEconomyEventRepository.findRecentForTeam(team.getId(), PageRequest.of(0, 8))
                         .stream()
                         .map(this::toEconomyEventItem)
@@ -681,6 +689,15 @@ public class SessionEconomyService {
                 event.getTimeDelta(),
                 event.getItemName(),
                 event.getItemQuantityDelta(),
+                event.getMessage(),
+                event.getCreatedAt()
+        );
+    }
+
+    private TeamStageEconomySummaryItem toStageEconomySummaryItem(TeamEconomyEvent event) {
+        return new TeamStageEconomySummaryItem(
+                event.getStageNumber(),
+                event.getAmountDelta(),
                 event.getMessage(),
                 event.getCreatedAt()
         );
