@@ -45,6 +45,15 @@ public class KanbanSolutionOption {
     @Column(name = "required_item_quantity", nullable = false)
     private Integer requiredItemQuantity;
 
+    @Column(name = "base_success_probability", nullable = false, precision = 5, scale = 2)
+    private BigDecimal baseSuccessProbability;
+
+    @Column(name = "nursing_success_multiplier", nullable = false, precision = 5, scale = 2)
+    private BigDecimal nursingSuccessMultiplier;
+
+    @Column(name = "engineering_success_multiplier", nullable = false, precision = 5, scale = 2)
+    private BigDecimal engineeringSuccessMultiplier;
+
     @Column(name = "sort_order", nullable = false)
     private Integer sortOrder;
 
@@ -67,6 +76,15 @@ public class KanbanSolutionOption {
         }
         if (sortOrder == null) {
             sortOrder = 1;
+        }
+        if (baseSuccessProbability == null) {
+            baseSuccessProbability = BigDecimal.ONE.setScale(2);
+        }
+        if (nursingSuccessMultiplier == null) {
+            nursingSuccessMultiplier = BigDecimal.ONE.setScale(2);
+        }
+        if (engineeringSuccessMultiplier == null) {
+            engineeringSuccessMultiplier = BigDecimal.ONE.setScale(2);
         }
         if (active == null) {
             active = true;
@@ -103,6 +121,18 @@ public class KanbanSolutionOption {
 
     public Integer getRequiredItemQuantity() {
         return requiredItemQuantity;
+    }
+
+    public BigDecimal getBaseSuccessProbability() {
+        return baseSuccessProbability;
+    }
+
+    public BigDecimal getNursingSuccessMultiplier() {
+        return nursingSuccessMultiplier;
+    }
+
+    public BigDecimal getEngineeringSuccessMultiplier() {
+        return engineeringSuccessMultiplier;
     }
 
     public Integer getSortOrder() {

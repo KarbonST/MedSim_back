@@ -252,20 +252,8 @@ public class SessionEconomyService {
             return;
         }
 
-        TeamResourceReservation reservation = getActiveReservation(card)
-                .orElseThrow(() -> new ResponseStatusException(
-                        HttpStatus.CONFLICT,
-                        "Перед финальным согласованием нужно выбрать способ решения и создать резерв ресурсов."
-                ));
-
-        resolveResourceBlocker(card.getTeam(), reservation.getBudgetAmount(), reservation.getTimeUnits(),
-                reservation.getItemName(), reservation.getItemQuantity())
-                .ifPresent(reason -> {
-                    throw new ResponseStatusException(
-                            HttpStatus.CONFLICT,
-                            "Нельзя согласовать задачу: %s".formatted(reason)
-                    );
-                });
+        TeamResourceReservation reservation = requireActiveReservationForCommit(card);
+        validateReservedResourcesCanBeCommitted(card, reservation);
 
         TeamEconomyState teamState = teamEconomyStateRepository.findByTeamId(card.getTeam().getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Экономика команды не найдена."));
@@ -303,6 +291,30 @@ public class SessionEconomyService {
                                 formatReservedItemSuffix(reservation.getItemName(), reservation.getItemQuantity())
                         )
         ));
+    }
+
+    @Transactional(readOnly = true)
+    public TeamResourceReservation requireActiveReservationForCommit(TeamKanbanCard card) {
+        return getActiveReservation(card)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Перед финальным согласованием нужно выбрать способ решения и создать резерв ресурсов."
+                ));
+    }
+
+    @Transactional(readOnly = true)
+    public void validateReservedResourcesCanBeCommitted(
+            TeamKanbanCard card,
+            TeamResourceReservation reservation
+    ) {
+        resolveResourceBlocker(card.getTeam(), reservation.getBudgetAmount(), reservation.getTimeUnits(),
+                reservation.getItemName(), reservation.getItemQuantity())
+                .ifPresent(reason -> {
+                    throw new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "Нельзя согласовать задачу: %s".formatted(reason)
+                    );
+                });
     }
 
     @Transactional

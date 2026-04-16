@@ -44,6 +44,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 @Service
@@ -416,6 +417,25 @@ public class KanbanService {
         KanbanCardStatus fromStatus = card.getStatus();
         KanbanResponsibleDepartment responsibleDepartment = card.getResponsibleDepartment();
         SessionParticipant assignee = card.getAssignee();
+        TeamResourceReservation reservation = sessionEconomyService.requireActiveReservationForCommit(card);
+        sessionEconomyService.validateReservedResourcesCanBeCommitted(card, reservation);
+
+        if (!isSolutionSuccessful(card, reservation.getSolutionOption())) {
+            sessionEconomyService.releaseReservedResources(actor, card);
+            card.returnToStageBacklog();
+            recordEvent(
+                    card,
+                    actor,
+                    assignee,
+                    KanbanCardEventType.SOLUTION_FAILED,
+                    fromStatus,
+                    card.getStatus(),
+                    null,
+                    responsibleDepartment
+            );
+            return;
+        }
+
         sessionEconomyService.commitReservedResources(actor, card);
         card.updateStatus(KanbanCardStatus.DONE);
         recordEvent(
@@ -607,6 +627,37 @@ public class KanbanService {
         }
     }
 
+    private boolean isSolutionSuccessful(TeamKanbanCard card, KanbanSolutionOption option) {
+        double successProbability = resolveSuccessProbability(card, option).doubleValue();
+
+        if (successProbability <= 0) {
+            return false;
+        }
+        if (successProbability >= 1) {
+            return true;
+        }
+
+        return ThreadLocalRandom.current().nextDouble() < successProbability;
+    }
+
+    private BigDecimal resolveSuccessProbability(TeamKanbanCard card, KanbanSolutionOption option) {
+        BigDecimal multiplier = BigDecimal.ONE;
+        if (card.getResponsibleDepartment() == KanbanResponsibleDepartment.NURSING) {
+            multiplier = option.getNursingSuccessMultiplier();
+        } else if (card.getResponsibleDepartment() == KanbanResponsibleDepartment.ENGINEERING) {
+            multiplier = option.getEngineeringSuccessMultiplier();
+        }
+
+        BigDecimal probability = option.getBaseSuccessProbability().multiply(multiplier);
+        if (probability.compareTo(BigDecimal.ZERO) < 0) {
+            return BigDecimal.ZERO;
+        }
+        if (probability.compareTo(BigDecimal.ONE) > 0) {
+            return BigDecimal.ONE;
+        }
+        return probability;
+    }
+
     private void ensureCurrentStatus(TeamKanbanCard card, KanbanCardStatus expectedStatus, String message) {
         if (card.getStatus() != expectedStatus) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, message);
@@ -670,6 +721,7 @@ public class KanbanService {
             case SOLUTION_SELECTED -> "%s выбрал способ решения и зарезервировал ресурсы".formatted(actorName);
             case SENT_TO_DEPARTMENT_REVIEW -> "%s отправил задачу на согласование".formatted(actorName);
             case DEPARTMENT_APPROVED -> "%s согласовал задачу и передал главврачу".formatted(actorName);
+            case SOLUTION_FAILED -> "%s проверил результат: решение не сработало, задача вернулась в задачи этапа".formatted(actorName);
             case CHIEF_DOCTOR_APPROVED -> "%s финально согласовал и закрыл задачу".formatted(actorName);
             case RETURNED_TO_STAGE -> "%s вернул задачу в задачи этапа".formatted(actorName);
         };
@@ -680,7 +732,7 @@ public class KanbanService {
             case DEPARTMENT_ASSIGNED -> "Нужно назначить исполнителя";
             case EXECUTOR_ASSIGNED -> "Вам назначена задача";
             case SENT_TO_DEPARTMENT_REVIEW, DEPARTMENT_APPROVED -> "Задача ожидает согласования";
-            case RETURNED_TO_STAGE -> "Задача возвращена";
+            case SOLUTION_FAILED, RETURNED_TO_STAGE -> "Задача возвращена";
             case CHIEF_DOCTOR_APPROVED -> "Задача закрыта";
             case PRIORITY_SET, WORK_STARTED, SOLUTION_SELECTED -> "Обновление задачи";
         };
@@ -708,6 +760,7 @@ public class KanbanService {
                     problemTitle,
                     roomName
             );
+            case SOLUTION_FAILED -> "%s проверил результат и вернул задачу в задачи этапа: %s, %s".formatted(actorName, problemTitle, roomName);
             case RETURNED_TO_STAGE -> "%s вернул задачу в задачи этапа: %s, %s".formatted(actorName, problemTitle, roomName);
             case CHIEF_DOCTOR_APPROVED -> "%s закрыл задачу: %s, %s".formatted(actorName, problemTitle, roomName);
             case PRIORITY_SET, WORK_STARTED, SOLUTION_SELECTED -> "%s: %s, %s".formatted(toHistoryMessage(event), problemTitle, roomName);

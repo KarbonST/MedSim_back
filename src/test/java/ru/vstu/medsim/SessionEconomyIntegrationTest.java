@@ -77,6 +77,65 @@ class SessionEconomyIntegrationTest {
                 Integer.class,
                 sessionCode
         );
+        Integer activeSolutionOptionCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM kanban_solution_options WHERE active = TRUE",
+                Integer.class
+        );
+        Integer activeStandardSolutionCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM kanban_solution_options WHERE active = TRUE AND title = 'Стандартное решение'",
+                Integer.class
+        );
+        Integer sanitaryCheckSolutionCount = jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM kanban_solution_options kso
+                JOIN clinic_room_problem_templates crpt ON crpt.id = kso.problem_template_id
+                JOIN clinic_room_templates crt ON crt.id = crpt.clinic_room_template_id
+                WHERE crt.code = 'PROCEDURE'
+                  AND crpt.problem_number = 28
+                  AND kso.active = TRUE
+                """,
+                Integer.class
+        );
+        BigDecimal xrayInternalRepairBaseChance = jdbcTemplate.queryForObject(
+                """
+                SELECT kso.base_success_probability
+                FROM kanban_solution_options kso
+                JOIN clinic_room_problem_templates crpt ON crpt.id = kso.problem_template_id
+                JOIN clinic_room_templates crt ON crt.id = crpt.clinic_room_template_id
+                WHERE crt.code = 'XRAY'
+                  AND crpt.problem_number = 1
+                  AND kso.title = 'Устранение силами поликлиники'
+                  AND kso.active = TRUE
+                """,
+                BigDecimal.class
+        );
+        BigDecimal xrayInternalRepairNursingMultiplier = jdbcTemplate.queryForObject(
+                """
+                SELECT kso.nursing_success_multiplier
+                FROM kanban_solution_options kso
+                JOIN clinic_room_problem_templates crpt ON crpt.id = kso.problem_template_id
+                JOIN clinic_room_templates crt ON crt.id = crpt.clinic_room_template_id
+                WHERE crt.code = 'XRAY'
+                  AND crpt.problem_number = 1
+                  AND kso.title = 'Устранение силами поликлиники'
+                  AND kso.active = TRUE
+                """,
+                BigDecimal.class
+        );
+        BigDecimal xrayInternalRepairEngineeringMultiplier = jdbcTemplate.queryForObject(
+                """
+                SELECT kso.engineering_success_multiplier
+                FROM kanban_solution_options kso
+                JOIN clinic_room_problem_templates crpt ON crpt.id = kso.problem_template_id
+                JOIN clinic_room_templates crt ON crt.id = crpt.clinic_room_template_id
+                WHERE crt.code = 'XRAY'
+                  AND crpt.problem_number = 1
+                  AND kso.title = 'Устранение силами поликлиники'
+                  AND kso.active = TRUE
+                """,
+                BigDecimal.class
+        );
 
         List<BigDecimal> balances = jdbcTemplate.queryForList(
                 "SELECT tes.current_balance FROM team_economy_states tes JOIN session_teams st ON st.id = tes.team_id JOIN game_sessions gs ON gs.id = st.game_session_id WHERE gs.code = ? ORDER BY st.sort_order",
@@ -93,6 +152,12 @@ class SessionEconomyIntegrationTest {
         assertThat(teamStateCount).isEqualTo(2);
         assertThat(roomStateCount).isEqualTo(20);
         assertThat(problemStateCount).isEqualTo(74);
+        assertThat(activeSolutionOptionCount).isEqualTo(74);
+        assertThat(activeStandardSolutionCount).isZero();
+        assertThat(sanitaryCheckSolutionCount).isEqualTo(3);
+        assertThat(xrayInternalRepairBaseChance).isEqualByComparingTo("0.70");
+        assertThat(xrayInternalRepairNursingMultiplier).isEqualByComparingTo("1.00");
+        assertThat(xrayInternalRepairEngineeringMultiplier).isEqualByComparingTo("0.70");
         assertThat(balances).containsExactly(new BigDecimal("15.00"), new BigDecimal("15.00"));
         assertThat(stageTimeUnits).containsExactly(15, 15);
     }
