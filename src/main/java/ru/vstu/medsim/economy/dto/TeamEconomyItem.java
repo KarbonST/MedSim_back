@@ -8,10 +8,15 @@ public record TeamEconomyItem(
         String teamName,
         BigDecimal currentBalance,
         Integer currentStageTimeUnits,
+        BigDecimal reservedBudget,
+        Integer reservedStageTimeUnits,
+        BigDecimal availableBalance,
+        Integer availableStageTimeUnits,
         BigDecimal totalIncome,
         BigDecimal totalExpenses,
         BigDecimal totalPenalties,
         BigDecimal totalBonuses,
+        List<TeamEconomyReservedItem> reservedItems,
         List<TeamRoomEconomyItem> rooms,
         List<TeamEconomyEventItem> recentEvents
 ) {

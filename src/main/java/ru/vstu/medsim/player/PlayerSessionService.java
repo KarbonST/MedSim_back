@@ -13,6 +13,7 @@ import ru.vstu.medsim.player.domain.Player;
 import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.player.dto.AvailablePlayerSessionResponse;
 import ru.vstu.medsim.player.dto.PlayerKanbanCardStatusUpdateRequest;
+import ru.vstu.medsim.player.dto.PlayerKanbanSolutionSelectionRequest;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinRequest;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinResponse;
 import ru.vstu.medsim.player.dto.PlayerTeamInventoryItemResponse;
@@ -158,6 +159,35 @@ public class PlayerSessionService {
         ensureKanbanIsAvailableForActiveStage(session);
 
         kanbanService.updateCardStatus(session, participant.getTeam(), participant, cardId, request);
+        return buildWorkspace(session, participant);
+    }
+
+    @Transactional
+    public PlayerTeamWorkspaceResponse selectKanbanCardSolution(
+            String sessionCode,
+            Long participantId,
+            Long cardId,
+            PlayerKanbanSolutionSelectionRequest request
+    ) {
+        SessionWorkspaceAccess access = resolveWorkspaceAccess(sessionCode, participantId);
+        GameSession session = access.session();
+        SessionParticipant participant = access.participant();
+
+        if (session.getStatus() == GameSessionStatus.LOBBY) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Канбан-доска доступна после старта игры.");
+        }
+
+        if (session.getStatus() == GameSessionStatus.FINISHED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Канбан-доска недоступна после завершения игры.");
+        }
+
+        if (participant.getTeam() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Сначала ведущий должен назначить вам команду.");
+        }
+
+        ensureKanbanIsAvailableForActiveStage(session);
+
+        kanbanService.selectSolutionOption(session, participant.getTeam(), participant, cardId, request);
         return buildWorkspace(session, participant);
     }
 

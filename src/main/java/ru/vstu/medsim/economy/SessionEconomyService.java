@@ -8,18 +8,21 @@ import org.springframework.web.server.ResponseStatusException;
 import ru.vstu.medsim.economy.domain.ClinicRoomProblemTemplate;
 import ru.vstu.medsim.economy.domain.ClinicRoomTemplate;
 import ru.vstu.medsim.economy.domain.ProblemSeverity;
+import ru.vstu.medsim.economy.domain.ResourceReservationStatus;
 import ru.vstu.medsim.economy.domain.SessionEconomySettings;
 import ru.vstu.medsim.economy.domain.SessionProblemStatus;
 import ru.vstu.medsim.economy.domain.TeamEconomyEvent;
 import ru.vstu.medsim.economy.domain.TeamEconomyEventType;
 import ru.vstu.medsim.economy.domain.TeamEconomyState;
 import ru.vstu.medsim.economy.domain.TeamProblemState;
+import ru.vstu.medsim.economy.domain.TeamResourceReservation;
 import ru.vstu.medsim.economy.domain.TeamRoomState;
 import ru.vstu.medsim.economy.dto.GameSessionEconomyResponse;
 import ru.vstu.medsim.economy.dto.SessionEconomySettingsItem;
 import ru.vstu.medsim.economy.dto.TeamEconomyEventItem;
 import ru.vstu.medsim.economy.dto.TeamEconomyItem;
 import ru.vstu.medsim.economy.dto.TeamProblemEconomyItem;
+import ru.vstu.medsim.economy.dto.TeamEconomyReservedItem;
 import ru.vstu.medsim.economy.dto.TeamRoomEconomyItem;
 import ru.vstu.medsim.economy.repository.ClinicRoomProblemTemplateRepository;
 import ru.vstu.medsim.economy.repository.ClinicRoomTemplateRepository;
@@ -27,7 +30,9 @@ import ru.vstu.medsim.economy.repository.SessionEconomySettingsRepository;
 import ru.vstu.medsim.economy.repository.TeamEconomyEventRepository;
 import ru.vstu.medsim.economy.repository.TeamEconomyStateRepository;
 import ru.vstu.medsim.economy.repository.TeamProblemStateRepository;
+import ru.vstu.medsim.economy.repository.TeamResourceReservationRepository;
 import ru.vstu.medsim.economy.repository.TeamRoomStateRepository;
+import ru.vstu.medsim.kanban.domain.KanbanSolutionOption;
 import ru.vstu.medsim.kanban.domain.TeamKanbanCard;
 import ru.vstu.medsim.player.domain.GameSession;
 import ru.vstu.medsim.player.domain.GameSessionStatus;
@@ -46,6 +51,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -65,6 +71,7 @@ public class SessionEconomyService {
     private final TeamRoomStateRepository teamRoomStateRepository;
     private final TeamProblemStateRepository teamProblemStateRepository;
     private final TeamInventoryItemRepository teamInventoryItemRepository;
+    private final TeamResourceReservationRepository teamResourceReservationRepository;
 
     public SessionEconomyService(
             GameSessionQueryService gameSessionQueryService,
@@ -76,7 +83,8 @@ public class SessionEconomyService {
             TeamEconomyEventRepository teamEconomyEventRepository,
             TeamRoomStateRepository teamRoomStateRepository,
             TeamProblemStateRepository teamProblemStateRepository,
-            TeamInventoryItemRepository teamInventoryItemRepository
+            TeamInventoryItemRepository teamInventoryItemRepository,
+            TeamResourceReservationRepository teamResourceReservationRepository
     ) {
         this.gameSessionQueryService = gameSessionQueryService;
         this.sessionTeamRepository = sessionTeamRepository;
@@ -88,6 +96,7 @@ public class SessionEconomyService {
         this.teamRoomStateRepository = teamRoomStateRepository;
         this.teamProblemStateRepository = teamProblemStateRepository;
         this.teamInventoryItemRepository = teamInventoryItemRepository;
+        this.teamResourceReservationRepository = teamResourceReservationRepository;
     }
 
     @Transactional
@@ -154,66 +163,144 @@ public class SessionEconomyService {
                 .forEach(teamEconomyState -> teamEconomyState.resetStageTime(settings.getStageTimeUnits()));
     }
 
+    @Transactional(readOnly = true)
+    public Optional<TeamResourceReservation> getCurrentReservation(TeamKanbanCard card) {
+        return teamResourceReservationRepository.findFirstByKanbanCardIdAndStatusInOrderByUpdatedAtDescIdDesc(
+                card.getId(),
+                List.of(ResourceReservationStatus.RESERVED, ResourceReservationStatus.COMMITTED)
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<TeamResourceReservation> getActiveReservation(TeamKanbanCard card) {
+        return teamResourceReservationRepository.findFirstByKanbanCardIdAndStatusOrderByUpdatedAtDescIdDesc(
+                card.getId(),
+                ResourceReservationStatus.RESERVED
+        );
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<String> getSolutionUnavailableReason(SessionTeam team, KanbanSolutionOption option) {
+        return resolveResourceBlocker(team, option.getBudgetCost(), option.getTimeCost(),
+                option.getRequiredItemName(), resolveRequiredItemQuantity(option));
+    }
+
     @Transactional
-    public void spendResourcesForTask(SessionParticipant actor, TeamKanbanCard card) {
-        if (card.getResourcesSpentAt() != null) {
-            return;
+    public TeamResourceReservation reserveResourcesForTask(
+            SessionParticipant actor,
+            TeamKanbanCard card,
+            KanbanSolutionOption option
+    ) {
+        Optional<TeamResourceReservation> existingReservation = getActiveReservation(card);
+
+        if (existingReservation.isPresent()
+                && existingReservation.get().getSolutionOption().getId().equals(option.getId())) {
+            return existingReservation.get();
         }
 
-        ClinicRoomProblemTemplate problemTemplate = card.getProblemState().getProblemTemplate();
-        BigDecimal budgetCost = problemTemplate.getBudgetCost();
-        int timeCost = problemTemplate.getTimeCost();
-        String requiredItemName = problemTemplate.getRequiredItemName();
-        int requiredItemQuantity = problemTemplate.getRequiredItemQuantity() != null
-                ? problemTemplate.getRequiredItemQuantity()
-                : 0;
+        resolveResourceBlocker(card.getTeam(), option.getBudgetCost(), option.getTimeCost(),
+                option.getRequiredItemName(), resolveRequiredItemQuantity(option))
+                .ifPresent(reason -> {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, reason);
+                });
 
-        TeamEconomyState teamState = teamEconomyStateRepository.findByTeamId(card.getTeam().getId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Экономика команды не найдена."));
+        existingReservation.ifPresent(reservation -> releaseReservation(actor, reservation, card, "Резерв заменён другим способом решения."));
 
-        if (teamState.getCurrentBalance().compareTo(budgetCost) < 0) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "У команды недостаточно бюджета для старта задачи.");
-        }
-
-        if (teamState.getCurrentStageTimeUnits() < timeCost) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "У команды недостаточно времени этапа для старта задачи.");
-        }
-
-        TeamInventoryItem inventoryItem = null;
-        if (requiredItemName != null && !requiredItemName.isBlank() && requiredItemQuantity > 0) {
-            inventoryItem = teamInventoryItemRepository
-                    .findByTeamIdAndItemNameIgnoreCase(card.getTeam().getId(), requiredItemName)
-                    .orElseThrow(() -> new ResponseStatusException(
-                            HttpStatus.CONFLICT,
-                            "На складе команды нет нужного предмета: %s.".formatted(requiredItemName)
-                    ));
-
-            if (inventoryItem.getQuantity() < requiredItemQuantity) {
-                throw new ResponseStatusException(
-                        HttpStatus.CONFLICT,
-                        "Недостаточно предметов '%s' на складе команды.".formatted(requiredItemName)
-                );
-            }
-        }
-
-        teamState.spendResources(budgetCost, timeCost);
-        if (inventoryItem != null) {
-            inventoryItem.consume(requiredItemQuantity);
-        }
-        card.markResourcesSpent();
+        TeamResourceReservation reservation = teamResourceReservationRepository.save(new TeamResourceReservation(
+                card.getTeam(),
+                card,
+                option,
+                actor
+        ));
 
         teamEconomyEventRepository.save(new TeamEconomyEvent(
                 card.getTeam(),
                 actor,
                 card,
-                TeamEconomyEventType.TASK_RESOURCES_SPENT,
-                problemTemplate.getStageNumber(),
-                budgetCost.negate(),
-                -timeCost,
+                TeamEconomyEventType.TASK_RESOURCES_RESERVED,
+                card.getProblemState().getProblemTemplate().getStageNumber(),
+                BigDecimal.ZERO.setScale(2),
+                0,
+                option.getRequiredItemName(),
+                0,
+                "Выбран способ '%s': зарезервировано бюджет %.2f и время %d%s."
+                        .formatted(
+                                option.getTitle(),
+                                option.getBudgetCost(),
+                                option.getTimeCost(),
+                                formatReservedItemSuffix(option.getRequiredItemName(), resolveRequiredItemQuantity(option))
+                        )
+        ));
+
+        return reservation;
+    }
+
+    @Transactional
+    public void releaseReservedResources(SessionParticipant actor, TeamKanbanCard card) {
+        getActiveReservation(card).ifPresent(reservation -> releaseReservation(
+                actor,
+                reservation,
+                card,
+                "Задача возвращена: резерв ресурсов снят."
+        ));
+    }
+
+    @Transactional
+    public void commitReservedResources(SessionParticipant actor, TeamKanbanCard card) {
+        if (card.getResourcesSpentAt() != null) {
+            return;
+        }
+
+        TeamResourceReservation reservation = getActiveReservation(card)
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Перед финальным согласованием нужно выбрать способ решения и создать резерв ресурсов."
+                ));
+
+        resolveResourceBlocker(card.getTeam(), reservation.getBudgetAmount(), reservation.getTimeUnits(),
+                reservation.getItemName(), reservation.getItemQuantity())
+                .ifPresent(reason -> {
+                    throw new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "Нельзя согласовать задачу: %s".formatted(reason)
+                    );
+                });
+
+        TeamEconomyState teamState = teamEconomyStateRepository.findByTeamId(card.getTeam().getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Экономика команды не найдена."));
+
+        TeamInventoryItem inventoryItem = null;
+        if (hasRequiredItem(reservation.getItemName(), reservation.getItemQuantity())) {
+            inventoryItem = teamInventoryItemRepository
+                    .findByTeamIdAndItemNameIgnoreCase(card.getTeam().getId(), reservation.getItemName())
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.CONFLICT,
+                            "Нельзя согласовать задачу: на складе команды нет нужного предмета: %s."
+                                    .formatted(reservation.getItemName())
+                    ));
+            inventoryItem.consume(reservation.getItemQuantity());
+        }
+
+        teamState.spendResources(reservation.getBudgetAmount(), reservation.getTimeUnits());
+        card.markResourcesSpent();
+        reservation.commit();
+
+        teamEconomyEventRepository.save(new TeamEconomyEvent(
+                card.getTeam(),
+                actor,
+                card,
+                TeamEconomyEventType.TASK_RESERVATION_COMMITTED,
+                card.getProblemState().getProblemTemplate().getStageNumber(),
+                reservation.getBudgetAmount().negate(),
+                -reservation.getTimeUnits(),
                 inventoryItem != null ? inventoryItem.getItemName() : null,
-                inventoryItem != null ? -requiredItemQuantity : 0,
-                "Старт задачи: %s. Списано бюджет %.2f и время %d."
-                        .formatted(problemTemplate.getTitle(), budgetCost, timeCost)
+                inventoryItem != null ? -reservation.getItemQuantity() : 0,
+                "Финальное согласование: списано бюджет %.2f и время %d%s."
+                        .formatted(
+                                reservation.getBudgetAmount(),
+                                reservation.getTimeUnits(),
+                                formatReservedItemSuffix(reservation.getItemName(), reservation.getItemQuantity())
+                        )
         ));
     }
 
@@ -411,16 +498,40 @@ public class SessionEconomyService {
         List<TeamRoomEconomyItem> roomItems = roomStates.stream()
                 .map(roomState -> toRoomItem(roomState, problemStatesByRoomStateId.getOrDefault(roomState.getId(), List.of())))
                 .toList();
+        List<TeamResourceReservation> activeReservations = teamResourceReservationRepository
+                .findAllByTeamIdAndStatusOrderByCreatedAtAscIdAsc(team.getId(), ResourceReservationStatus.RESERVED);
+        BigDecimal reservedBudget = activeReservations.stream()
+                .map(TeamResourceReservation::getBudgetAmount)
+                .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add);
+        int reservedStageTimeUnits = activeReservations.stream()
+                .mapToInt(TeamResourceReservation::getTimeUnits)
+                .sum();
+        List<TeamEconomyReservedItem> reservedItems = activeReservations.stream()
+                .filter(reservation -> hasRequiredItem(reservation.getItemName(), reservation.getItemQuantity()))
+                .collect(Collectors.groupingBy(
+                        TeamResourceReservation::getItemName,
+                        LinkedHashMap::new,
+                        Collectors.summingInt(TeamResourceReservation::getItemQuantity)
+                ))
+                .entrySet()
+                .stream()
+                .map(entry -> new TeamEconomyReservedItem(entry.getKey(), entry.getValue()))
+                .toList();
 
         return new TeamEconomyItem(
                 team.getId(),
                 team.getName(),
                 state.getCurrentBalance(),
                 state.getCurrentStageTimeUnits(),
+                reservedBudget,
+                reservedStageTimeUnits,
+                state.getCurrentBalance().subtract(reservedBudget),
+                state.getCurrentStageTimeUnits() - reservedStageTimeUnits,
                 state.getTotalIncome(),
                 state.getTotalExpenses(),
                 state.getTotalPenalties(),
                 state.getTotalBonuses(),
+                reservedItems,
                 roomItems,
                 teamEconomyEventRepository.findRecentForTeam(team.getId(), PageRequest.of(0, 8))
                         .stream()
@@ -485,6 +596,80 @@ public class SessionEconomyService {
     private boolean isReleasedByStage(TeamProblemState problemState, Integer stageNumber) {
         Integer problemStageNumber = problemState.getProblemTemplate().getStageNumber();
         return stageNumber == null || problemStageNumber == null || problemStageNumber <= stageNumber;
+    }
+
+    private Optional<String> resolveResourceBlocker(
+            SessionTeam team,
+            BigDecimal budgetCost,
+            int timeCost,
+            String requiredItemName,
+            int requiredItemQuantity
+    ) {
+        TeamEconomyState teamState = teamEconomyStateRepository.findByTeamId(team.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Экономика команды не найдена."));
+
+        if (teamState.getCurrentBalance().compareTo(budgetCost) < 0) {
+            return Optional.of("у команды недостаточно бюджета для выбранного решения.");
+        }
+
+        if (teamState.getCurrentStageTimeUnits() < timeCost) {
+            return Optional.of("у команды недостаточно времени этапа для выбранного решения.");
+        }
+
+        if (hasRequiredItem(requiredItemName, requiredItemQuantity)) {
+            Optional<TeamInventoryItem> inventoryItem = teamInventoryItemRepository
+                    .findByTeamIdAndItemNameIgnoreCase(team.getId(), requiredItemName);
+
+            if (inventoryItem.isEmpty()) {
+                return Optional.of("на складе команды нет нужного предмета: %s.".formatted(requiredItemName));
+            }
+
+            if (inventoryItem.get().getQuantity() < requiredItemQuantity) {
+                return Optional.of("недостаточно предметов '%s' на складе команды.".formatted(requiredItemName));
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    private void releaseReservation(
+            SessionParticipant actor,
+            TeamResourceReservation reservation,
+            TeamKanbanCard card,
+            String message
+    ) {
+        reservation.release();
+        teamEconomyEventRepository.save(new TeamEconomyEvent(
+                card.getTeam(),
+                actor,
+                card,
+                TeamEconomyEventType.TASK_RESERVATION_RELEASED,
+                card.getProblemState().getProblemTemplate().getStageNumber(),
+                BigDecimal.ZERO.setScale(2),
+                0,
+                reservation.getItemName(),
+                0,
+                message
+        ));
+    }
+
+    private boolean hasRequiredItem(String requiredItemName, Integer requiredItemQuantity) {
+        return requiredItemName != null
+                && !requiredItemName.isBlank()
+                && requiredItemQuantity != null
+                && requiredItemQuantity > 0;
+    }
+
+    private int resolveRequiredItemQuantity(KanbanSolutionOption option) {
+        return option.getRequiredItemQuantity() != null ? option.getRequiredItemQuantity() : 0;
+    }
+
+    private String formatReservedItemSuffix(String itemName, Integer quantity) {
+        if (!hasRequiredItem(itemName, quantity)) {
+            return "";
+        }
+
+        return ", предмет %s %d шт.".formatted(itemName, quantity);
     }
 
     private TeamEconomyEventItem toEconomyEventItem(TeamEconomyEvent event) {

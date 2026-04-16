@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import ru.vstu.medsim.player.dto.AvailablePlayerSessionResponse;
 import ru.vstu.medsim.player.dto.PlayerKanbanCardStatusUpdateRequest;
+import ru.vstu.medsim.player.dto.PlayerKanbanSolutionSelectionRequest;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinRequest;
 import ru.vstu.medsim.player.dto.PlayerSessionJoinResponse;
 import ru.vstu.medsim.player.dto.PlayerTeamWorkspaceResponse;
@@ -52,5 +53,15 @@ public class PlayerSessionController {
             @Valid @RequestBody PlayerKanbanCardStatusUpdateRequest request
     ) {
         return playerSessionService.updateKanbanCardStatus(sessionCode, participantId, cardId, request);
+    }
+
+    @PatchMapping("/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/solution")
+    public PlayerTeamWorkspaceResponse selectKanbanCardSolution(
+            @PathVariable String sessionCode,
+            @PathVariable Long participantId,
+            @PathVariable Long cardId,
+            @Valid @RequestBody PlayerKanbanSolutionSelectionRequest request
+    ) {
+        return playerSessionService.selectKanbanCardSolution(sessionCode, participantId, cardId, request);
     }
 }

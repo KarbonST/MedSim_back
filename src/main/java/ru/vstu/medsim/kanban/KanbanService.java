@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import ru.vstu.medsim.economy.SessionEconomyService;
+import ru.vstu.medsim.economy.domain.TeamResourceReservation;
 import ru.vstu.medsim.economy.domain.SessionProblemStatus;
 import ru.vstu.medsim.economy.domain.TeamProblemState;
 import ru.vstu.medsim.economy.repository.TeamProblemStateRepository;
@@ -13,19 +14,23 @@ import ru.vstu.medsim.kanban.domain.KanbanCardEventType;
 import ru.vstu.medsim.kanban.domain.KanbanCardPriority;
 import ru.vstu.medsim.kanban.domain.KanbanCardStatus;
 import ru.vstu.medsim.kanban.domain.KanbanResponsibleDepartment;
+import ru.vstu.medsim.kanban.domain.KanbanSolutionOption;
 import ru.vstu.medsim.kanban.domain.TeamKanbanCard;
 import ru.vstu.medsim.kanban.domain.TeamKanbanCardEvent;
 import ru.vstu.medsim.kanban.dto.GameSessionKanbanResponse;
 import ru.vstu.medsim.kanban.dto.KanbanCardHistoryItem;
+import ru.vstu.medsim.kanban.dto.KanbanSolutionOptionItem;
 import ru.vstu.medsim.kanban.dto.PlayerKanbanNotificationItem;
 import ru.vstu.medsim.kanban.dto.TeamKanbanBoardItem;
 import ru.vstu.medsim.kanban.dto.TeamKanbanCardItem;
 import ru.vstu.medsim.kanban.dto.TeamKanbanOverviewItem;
+import ru.vstu.medsim.kanban.repository.KanbanSolutionOptionRepository;
 import ru.vstu.medsim.kanban.repository.TeamKanbanCardEventRepository;
 import ru.vstu.medsim.kanban.repository.TeamKanbanCardRepository;
 import ru.vstu.medsim.player.domain.GameSession;
 import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.player.dto.PlayerKanbanCardStatusUpdateRequest;
+import ru.vstu.medsim.player.dto.PlayerKanbanSolutionSelectionRequest;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.GameSessionQueryService;
 import ru.vstu.medsim.session.domain.SessionStageSetting;
@@ -33,6 +38,7 @@ import ru.vstu.medsim.session.domain.SessionTeam;
 import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
 import ru.vstu.medsim.session.repository.SessionTeamRepository;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -68,6 +74,7 @@ public class KanbanService {
     private final TeamProblemStateRepository teamProblemStateRepository;
     private final TeamKanbanCardRepository teamKanbanCardRepository;
     private final TeamKanbanCardEventRepository teamKanbanCardEventRepository;
+    private final KanbanSolutionOptionRepository kanbanSolutionOptionRepository;
     private final SessionEconomyService sessionEconomyService;
     private final GameSessionQueryService gameSessionQueryService;
     private final SessionTeamRepository sessionTeamRepository;
@@ -78,6 +85,7 @@ public class KanbanService {
             TeamProblemStateRepository teamProblemStateRepository,
             TeamKanbanCardRepository teamKanbanCardRepository,
             TeamKanbanCardEventRepository teamKanbanCardEventRepository,
+            KanbanSolutionOptionRepository kanbanSolutionOptionRepository,
             SessionEconomyService sessionEconomyService,
             GameSessionQueryService gameSessionQueryService,
             SessionTeamRepository sessionTeamRepository,
@@ -87,6 +95,7 @@ public class KanbanService {
         this.teamProblemStateRepository = teamProblemStateRepository;
         this.teamKanbanCardRepository = teamKanbanCardRepository;
         this.teamKanbanCardEventRepository = teamKanbanCardEventRepository;
+        this.kanbanSolutionOptionRepository = kanbanSolutionOptionRepository;
         this.sessionEconomyService = sessionEconomyService;
         this.gameSessionQueryService = gameSessionQueryService;
         this.sessionTeamRepository = sessionTeamRepository;
@@ -180,6 +189,49 @@ public class KanbanService {
         }
 
         applyWorkflowUpdate(session, team, actor, card, request);
+        card.getProblemState().updateStatus(toProblemStatus(card.getStatus()));
+    }
+
+    @Transactional
+    public void selectSolutionOption(
+            GameSession session,
+            SessionTeam team,
+            SessionParticipant actor,
+            Long cardId,
+            PlayerKanbanSolutionSelectionRequest request
+    ) {
+        TeamKanbanCard card = teamKanbanCardRepository
+                .findCardForTeamSession(cardId, team.getId(), session.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Карточка канбан-доски не найдена."));
+
+        if (!isReleasedForStage(card, session.getActiveStageNumber())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Эта карточка относится к будущему этапу и пока недоступна.");
+        }
+
+        ensureCurrentStatus(card, KanbanCardStatus.IN_PROGRESS, "Способ решения можно выбрать только для задачи в работе.");
+
+        if (card.getAssignee() == null || !card.getAssignee().getId().equals(actor.getId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Способ решения может выбрать только назначенный исполнитель.");
+        }
+
+        KanbanSolutionOption solutionOption = kanbanSolutionOptionRepository
+                .findByIdAndProblemTemplateIdAndActiveTrue(
+                        request.solutionOptionId(),
+                        card.getProblemState().getProblemTemplate().getId()
+                )
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Способ решения не найден для этой задачи."));
+
+        sessionEconomyService.reserveResourcesForTask(actor, card, solutionOption);
+        recordEvent(
+                card,
+                actor,
+                null,
+                KanbanCardEventType.SOLUTION_SELECTED,
+                card.getStatus(),
+                card.getStatus(),
+                null,
+                card.getResponsibleDepartment()
+        );
         card.getProblemState().updateStatus(toProblemStatus(card.getStatus()));
     }
 
@@ -296,7 +348,6 @@ public class KanbanService {
 
         KanbanCardStatus fromStatus = card.getStatus();
         KanbanResponsibleDepartment responsibleDepartment = card.getResponsibleDepartment();
-        sessionEconomyService.spendResourcesForTask(actor, card);
         card.startWork();
         recordEvent(
                 card,
@@ -315,6 +366,13 @@ public class KanbanService {
 
         if (card.getAssignee() == null || !card.getAssignee().getId().equals(actor.getId())) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Отправить задачу на проверку может только назначенный исполнитель.");
+        }
+
+        if (card.getResourcesSpentAt() == null && sessionEconomyService.getActiveReservation(card).isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Перед отправкой на согласование выберите способ решения задачи."
+            );
         }
 
         KanbanCardStatus fromStatus = card.getStatus();
@@ -358,6 +416,7 @@ public class KanbanService {
         KanbanCardStatus fromStatus = card.getStatus();
         KanbanResponsibleDepartment responsibleDepartment = card.getResponsibleDepartment();
         SessionParticipant assignee = card.getAssignee();
+        sessionEconomyService.commitReservedResources(actor, card);
         card.updateStatus(KanbanCardStatus.DONE);
         recordEvent(
                 card,
@@ -384,6 +443,7 @@ public class KanbanService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Вернуть в задачи этапа можно только карточку на согласовании.");
         }
 
+        sessionEconomyService.releaseReservedResources(actor, card);
         card.returnToStageBacklog();
         recordEvent(
                 card,
@@ -427,6 +487,9 @@ public class KanbanService {
     private TeamKanbanCardItem toCardItem(TeamKanbanCard card, List<TeamKanbanCardEvent> events) {
         SessionParticipant assignee = card.getAssignee();
         var problemTemplate = card.getProblemState().getProblemTemplate();
+        List<KanbanSolutionOption> solutionOptions = kanbanSolutionOptionRepository
+                .findAllByProblemTemplateIdAndActiveTrueOrderBySortOrderAscIdAsc(problemTemplate.getId());
+        Optional<TeamResourceReservation> reservation = sessionEconomyService.getCurrentReservation(card);
 
         return new TeamKanbanCardItem(
                 card.getId(),
@@ -442,6 +505,16 @@ public class KanbanService {
                 problemTemplate.getTimeCost(),
                 problemTemplate.getRequiredItemName(),
                 problemTemplate.getRequiredItemQuantity(),
+                solutionOptions.stream()
+                        .map(option -> toSolutionOptionItem(card, option))
+                        .toList(),
+                reservation.map(value -> value.getSolutionOption().getId()).orElse(null),
+                reservation.map(value -> value.getSolutionOption().getTitle()).orElse(null),
+                reservation.map(value -> value.getStatus().name()).orElse(null),
+                reservation.map(TeamResourceReservation::getBudgetAmount).orElse(BigDecimal.ZERO.setScale(2)),
+                reservation.map(TeamResourceReservation::getTimeUnits).orElse(0),
+                reservation.map(TeamResourceReservation::getItemName).orElse(null),
+                reservation.map(TeamResourceReservation::getItemQuantity).orElse(0),
                 card.getResourcesSpentAt() != null,
                 card.getResponsibleDepartment() != null ? card.getResponsibleDepartment().name() : null,
                 card.getStatus().name(),
@@ -450,6 +523,22 @@ public class KanbanService {
                 events.stream()
                         .map(this::toHistoryItem)
                         .toList()
+        );
+    }
+
+    private KanbanSolutionOptionItem toSolutionOptionItem(TeamKanbanCard card, KanbanSolutionOption option) {
+        Optional<String> unavailableReason = sessionEconomyService.getSolutionUnavailableReason(card.getTeam(), option);
+
+        return new KanbanSolutionOptionItem(
+                option.getId(),
+                option.getTitle(),
+                option.getDescription(),
+                option.getBudgetCost(),
+                option.getTimeCost(),
+                option.getRequiredItemName(),
+                option.getRequiredItemQuantity(),
+                unavailableReason.isEmpty(),
+                unavailableReason.orElse(null)
         );
     }
 
@@ -578,6 +667,7 @@ public class KanbanService {
                     toParticipantName(event.getTargetParticipant())
             );
             case WORK_STARTED -> "%s взял задачу в работу".formatted(actorName);
+            case SOLUTION_SELECTED -> "%s выбрал способ решения и зарезервировал ресурсы".formatted(actorName);
             case SENT_TO_DEPARTMENT_REVIEW -> "%s отправил задачу на согласование".formatted(actorName);
             case DEPARTMENT_APPROVED -> "%s согласовал задачу и передал главврачу".formatted(actorName);
             case CHIEF_DOCTOR_APPROVED -> "%s финально согласовал и закрыл задачу".formatted(actorName);
@@ -592,7 +682,7 @@ public class KanbanService {
             case SENT_TO_DEPARTMENT_REVIEW, DEPARTMENT_APPROVED -> "Задача ожидает согласования";
             case RETURNED_TO_STAGE -> "Задача возвращена";
             case CHIEF_DOCTOR_APPROVED -> "Задача закрыта";
-            case PRIORITY_SET, WORK_STARTED -> "Обновление задачи";
+            case PRIORITY_SET, WORK_STARTED, SOLUTION_SELECTED -> "Обновление задачи";
         };
     }
 
@@ -620,7 +710,7 @@ public class KanbanService {
             );
             case RETURNED_TO_STAGE -> "%s вернул задачу в задачи этапа: %s, %s".formatted(actorName, problemTitle, roomName);
             case CHIEF_DOCTOR_APPROVED -> "%s закрыл задачу: %s, %s".formatted(actorName, problemTitle, roomName);
-            case PRIORITY_SET, WORK_STARTED -> "%s: %s, %s".formatted(toHistoryMessage(event), problemTitle, roomName);
+            case PRIORITY_SET, WORK_STARTED, SOLUTION_SELECTED -> "%s: %s, %s".formatted(toHistoryMessage(event), problemTitle, roomName);
         };
     }
 

@@ -422,12 +422,13 @@ class PlayerSessionControllerIntegrationTest {
     void shouldMoveKanbanCardThroughTwoStepApprovalAndResolveProblem() throws Exception {
         String sessionCode = createSession("Канбан смена", 2);
         prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
-        selectCurrentStage(sessionCode, 2);
+        selectCurrentStage(sessionCode, 1);
         Long chiefDoctorId = participantIdByName(sessionCode, "Анна Петрова");
         Long engineeringLeadId = participantIdByName(sessionCode, "Павел Орлов");
         Long engineeringExecutorId = participantIdByName(sessionCode, "Дмитрий Ковалёв");
         Long problemStateId = firstProblemStateId(sessionCode, firstTeamId(sessionCode));
         Long cardId = firstKanbanCardId(sessionCode, firstTeamId(sessionCode));
+        Long solutionOptionId = standardSolutionOptionId(cardId);
 
         mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -460,7 +461,19 @@ class PlayerSessionControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("status", "IN_PROGRESS"))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("IN_PROGRESS"));
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("IN_PROGRESS"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].resourcesSpent").value(false))
+                .andExpect(jsonPath("$.teamEconomy.currentBalance").value(15.0));
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/solution", sessionCode, engineeringExecutorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("solutionOptionId", solutionOptionId))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].selectedSolutionOptionId").value(solutionOptionId))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].reservationStatus").value("RESERVED"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].resourcesSpent").value(false))
+                .andExpect(jsonPath("$.teamEconomy.currentBalance").value(15.0))
+                .andExpect(jsonPath("$.teamEconomy.reservedBudget").value(2.0));
 
         mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringExecutorId, cardId)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -487,7 +500,10 @@ class PlayerSessionControllerIntegrationTest {
                         .content(objectMapper.writeValueAsString(Map.of("status", "DONE"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("DONE"))
-                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].history.length()").value(7))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].history.length()").value(8))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].reservationStatus").value("COMMITTED"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].resourcesSpent").value(true))
+                .andExpect(jsonPath("$.teamEconomy.currentBalance").value(13.0))
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].activeProblemCount").value(2))
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].problems[0].status").value("RESOLVED"));
 
@@ -520,11 +536,77 @@ class PlayerSessionControllerIntegrationTest {
     void shouldReturnKanbanCardToStageTasksWhenDepartmentApprovalFails() throws Exception {
         String sessionCode = createSession("Канбан возврат", 2);
         prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
-        selectCurrentStage(sessionCode, 2);
+        selectCurrentStage(sessionCode, 1);
         Long chiefDoctorId = participantIdByName(sessionCode, "Анна Петрова");
         Long engineeringLeadId = participantIdByName(sessionCode, "Павел Орлов");
         Long engineeringExecutorId = participantIdByName(sessionCode, "Дмитрий Ковалёв");
         Long problemStateId = firstProblemStateId(sessionCode, firstTeamId(sessionCode));
+        Long cardId = firstKanbanCardId(sessionCode, firstTeamId(sessionCode));
+        Long solutionOptionId = standardSolutionOptionId(cardId);
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "status", "ASSIGNED",
+                                "priority", "HIGH",
+                                "responsibleDepartment", "ENGINEERING"
+                        ))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringLeadId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "status", "READY_FOR_WORK",
+                                "assigneeParticipantId", engineeringExecutorId
+                        ))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringExecutorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "IN_PROGRESS"))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/solution", sessionCode, engineeringExecutorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("solutionOptionId", solutionOptionId))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringExecutorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "DEPARTMENT_REVIEW"))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringLeadId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "REGISTERED"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("REGISTERED"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].reservationStatus").value(nullValue()))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].responsibleDepartment").value(nullValue()))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].assigneeParticipantId").value(nullValue()));
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, engineeringExecutorId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kanbanNotifications[0].type").value("RETURNED_TO_STAGE"));
+
+        String storedStatus = jdbcTemplate.queryForObject(
+                "SELECT status FROM team_problem_states WHERE id = ?",
+                String.class,
+                problemStateId
+        );
+
+        assertThat(storedStatus).isEqualTo("ACTIVE");
+        assertThat(latestReservationStatus(cardId)).isEqualTo("RELEASED");
+    }
+
+    @Test
+    void shouldRejectDepartmentReviewWithoutSelectedSolution() throws Exception {
+        String sessionCode = createSession("Канбан без решения", 2);
+        prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
+        selectCurrentStage(sessionCode, 1);
+        Long chiefDoctorId = participantIdByName(sessionCode, "Анна Петрова");
+        Long engineeringLeadId = participantIdByName(sessionCode, "Павел Орлов");
+        Long engineeringExecutorId = participantIdByName(sessionCode, "Дмитрий Ковалёв");
         Long cardId = firstKanbanCardId(sessionCode, firstTeamId(sessionCode));
 
         mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
@@ -552,27 +634,50 @@ class PlayerSessionControllerIntegrationTest {
         mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringExecutorId, cardId)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(Map.of("status", "DEPARTMENT_REVIEW"))))
-                .andExpect(status().isOk());
+                .andExpect(status().isConflict());
+    }
 
-        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringLeadId, cardId)
+    @Test
+    void shouldAllowSoftReservationsButRejectFinalApprovalWhenResourcesAlreadySpent() throws Exception {
+        String sessionCode = createSession("Канбан мягкий резерв", 2);
+        mockMvc.perform(put("/api/game-sessions/{sessionCode}/economy/settings", sessionCode)
+                        .with(auth())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(Map.of("status", "REGISTERED"))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("REGISTERED"))
-                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].responsibleDepartment").value(nullValue()))
-                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].assigneeParticipantId").value(nullValue()));
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "startingBudget", "3.00",
+                                "stageTimeUnits", 10
+                        ))))
+                .andExpect(status().isOk());
+        prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
+        selectCurrentStage(sessionCode, 1);
+        Long teamId = firstTeamId(sessionCode);
+        Long chiefDoctorId = participantIdByName(sessionCode, "Анна Петрова");
+        Long engineeringLeadId = participantIdByName(sessionCode, "Павел Орлов");
+        Long engineeringExecutorId = participantIdByName(sessionCode, "Дмитрий Ковалёв");
+        Long firstCardId = kanbanCardIdByProblemNumber(sessionCode, teamId, 1);
+        Long secondCardId = kanbanCardIdByProblemNumber(sessionCode, teamId, 4);
+
+        moveEngineeringCardToChiefReview(sessionCode, chiefDoctorId, engineeringLeadId, engineeringExecutorId, firstCardId);
+        moveEngineeringCardToChiefReview(sessionCode, chiefDoctorId, engineeringLeadId, engineeringExecutorId, secondCardId);
 
         mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, engineeringExecutorId))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.kanbanNotifications[0].type").value("RETURNED_TO_STAGE"));
+                .andExpect(jsonPath("$.teamEconomy.currentBalance").value(3.0))
+                .andExpect(jsonPath("$.teamEconomy.reservedBudget").value(4.0));
 
-        String storedStatus = jdbcTemplate.queryForObject(
-                "SELECT status FROM team_problem_states WHERE id = ?",
-                String.class,
-                problemStateId
-        );
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, firstCardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "DONE"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamEconomy.currentBalance").value(1.0));
 
-        assertThat(storedStatus).isEqualTo("ACTIVE");
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, secondCardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "DONE"))))
+                .andExpect(status().isConflict());
+
+        assertThat(latestReservationStatus(firstCardId)).isEqualTo("COMMITTED");
+        assertThat(latestReservationStatus(secondCardId)).isEqualTo("RESERVED");
     }
 
     @Test
@@ -1677,6 +1782,104 @@ class PlayerSessionControllerIntegrationTest {
                 sessionCode,
                 teamId
         );
+    }
+
+    private Long kanbanCardIdByProblemNumber(String sessionCode, Long teamId, int problemNumber) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT tkc.id
+                FROM team_kanban_cards tkc
+                JOIN team_problem_states tps ON tps.id = tkc.problem_state_id
+                JOIN team_room_states trs ON trs.id = tps.team_room_state_id
+                JOIN clinic_room_problem_templates crpt ON crpt.id = tps.clinic_room_problem_template_id
+                JOIN session_teams st ON st.id = trs.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.id = ?
+                  AND crpt.problem_number = ?
+                LIMIT 1
+                """,
+                Long.class,
+                sessionCode,
+                teamId,
+                problemNumber
+        );
+    }
+
+    private Long standardSolutionOptionId(Long cardId) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT kso.id
+                FROM kanban_solution_options kso
+                JOIN clinic_room_problem_templates crpt ON crpt.id = kso.problem_template_id
+                JOIN team_problem_states tps ON tps.clinic_room_problem_template_id = crpt.id
+                JOIN team_kanban_cards tkc ON tkc.problem_state_id = tps.id
+                WHERE tkc.id = ?
+                ORDER BY kso.sort_order, kso.id
+                LIMIT 1
+                """,
+                Long.class,
+                cardId
+        );
+    }
+
+    private String latestReservationStatus(Long cardId) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT status
+                FROM team_resource_reservations
+                WHERE kanban_card_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                String.class,
+                cardId
+        );
+    }
+
+    private void moveEngineeringCardToChiefReview(
+            String sessionCode,
+            Long chiefDoctorId,
+            Long engineeringLeadId,
+            Long engineeringExecutorId,
+            Long cardId
+    ) throws Exception {
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "status", "ASSIGNED",
+                                "priority", "HIGH",
+                                "responsibleDepartment", "ENGINEERING"
+                        ))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringLeadId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "status", "READY_FOR_WORK",
+                                "assigneeParticipantId", engineeringExecutorId
+                        ))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringExecutorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "IN_PROGRESS"))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/solution", sessionCode, engineeringExecutorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("solutionOptionId", standardSolutionOptionId(cardId)))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringExecutorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "DEPARTMENT_REVIEW"))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringLeadId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "CHIEF_DOCTOR_REVIEW"))))
+                .andExpect(status().isOk());
     }
 
     private void assignParticipantToTeam(String sessionCode, Long participantId, Long teamId) throws Exception {
