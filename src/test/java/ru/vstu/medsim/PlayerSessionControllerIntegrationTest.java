@@ -601,6 +601,72 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
+    void shouldHoldTaskForNextStageAndReleaseItWhenStageChanges() throws Exception {
+        String sessionCode = createSession("Канбан отложенные задачи", 2);
+        prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
+        selectCurrentStage(sessionCode, 1);
+        Long chiefDoctorId = participantIdByName(sessionCode, "Анна Петрова");
+        Long teamId = firstTeamId(sessionCode);
+        Long cardId = firstKanbanCardId(sessionCode, teamId);
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "HOLD"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("HOLD"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].history[0].eventType").value("TASK_HELD"));
+
+        String heldProblemStatus = jdbcTemplate.queryForObject(
+                """
+                SELECT tps.status
+                FROM team_problem_states tps
+                JOIN team_kanban_cards tkc ON tkc.problem_state_id = tps.id
+                WHERE tkc.id = ?
+                """,
+                String.class,
+                cardId
+        );
+
+        assertThat(heldProblemStatus).isEqualTo("ACTIVE");
+
+        selectCurrentStage(sessionCode, 2);
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, chiefDoctorId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("REGISTERED"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].history[1].eventType").value("HOLD_RELEASED"));
+    }
+
+    @Test
+    void shouldAllowDepartmentLeadToHoldAssignedTaskBeforeWorkStarts() throws Exception {
+        String sessionCode = createSession("Канбан hold руководителя", 2);
+        prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
+        selectCurrentStage(sessionCode, 1);
+        Long chiefDoctorId = participantIdByName(sessionCode, "Анна Петрова");
+        Long engineeringLeadId = participantIdByName(sessionCode, "Павел Орлов");
+        Long teamId = firstTeamId(sessionCode);
+        Long cardId = firstKanbanCardId(sessionCode, teamId);
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "status", "ASSIGNED",
+                                "priority", "HIGH",
+                                "responsibleDepartment", "ENGINEERING"
+                        ))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringLeadId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "HOLD"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("HOLD"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].responsibleDepartment").value("ENGINEERING"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].assigneeParticipantId").value(nullValue()))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].history[2].eventType").value("TASK_HELD"));
+    }
+
+    @Test
     void shouldReturnKanbanCardToStageTasksWhenDepartmentApprovalFails() throws Exception {
         String sessionCode = createSession("Канбан возврат", 2);
         prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);

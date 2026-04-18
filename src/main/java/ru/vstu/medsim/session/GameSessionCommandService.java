@@ -314,9 +314,11 @@ public class GameSessionCommandService {
         SessionStageSetting previousStage = session.getActiveStageNumber() != null
                 ? getStageOrThrow(session, session.getActiveStageNumber())
                 : null;
+        boolean stageChanged = previousStage == null
+                || !previousStage.getStageNumber().equals(stage.getStageNumber());
 
         if (previousStage != null
-                && !previousStage.getStageNumber().equals(stage.getStageNumber())
+                && stageChanged
                 && previousStage.getInteractionMode().hasProblemWorkflow()) {
             sessionEconomyService.settleStageForSession(session, previousStage.getStageNumber());
         }
@@ -329,6 +331,9 @@ public class GameSessionCommandService {
 
         gameSessionRepository.save(session);
         sessionEconomyService.resetStageTimeForSession(session.getId());
+        if (stageChanged) {
+            kanbanService.releaseHeldCardsForStage(session, stage.getStageNumber());
+        }
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 

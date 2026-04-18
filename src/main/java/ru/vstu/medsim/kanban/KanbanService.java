@@ -71,6 +71,12 @@ public class KanbanService {
                     "Заместитель главного инженера по АХЧ"
             )
     );
+    private static final Set<KanbanCardStatus> HOLDABLE_STATUSES = Set.of(
+            KanbanCardStatus.REGISTERED,
+            KanbanCardStatus.ASSIGNED,
+            KanbanCardStatus.READY_FOR_WORK,
+            KanbanCardStatus.REWORK
+    );
 
     private final TeamProblemStateRepository teamProblemStateRepository;
     private final TeamKanbanCardRepository teamKanbanCardRepository;
@@ -174,6 +180,18 @@ public class KanbanService {
     }
 
     @Transactional
+    public void releaseHeldCardsForStage(GameSession session, Integer activeStageNumber) {
+        if (activeStageNumber == null) {
+            return;
+        }
+
+        teamKanbanCardRepository.findAllByGameSessionIdAndStatus(session.getId(), KanbanCardStatus.HOLD)
+                .stream()
+                .filter(card -> isReleasedForStage(card, activeStageNumber))
+                .forEach(this::releaseHeldCardToStageBacklog);
+    }
+
+    @Transactional
     public void updateCardStatus(
             GameSession session,
             SessionTeam team,
@@ -250,6 +268,7 @@ public class KanbanService {
             case DEPARTMENT_REVIEW -> sendToDepartmentReview(actor, card);
             case CHIEF_DOCTOR_REVIEW -> approveDepartmentReview(actor, card);
             case DONE -> approveChiefDoctorReview(actor, card);
+            case HOLD -> holdCardForNextStage(actor, card);
             case REGISTERED -> returnCardToStageBacklog(actor, card);
             case REWORK -> throw new ResponseStatusException(
                     HttpStatus.BAD_REQUEST,
@@ -459,8 +478,10 @@ public class KanbanService {
             ensureDepartmentLead(actor, requireResponsibleDepartment(card));
         } else if (card.getStatus() == KanbanCardStatus.CHIEF_DOCTOR_REVIEW) {
             ensureChiefDoctor(actor);
+        } else if (card.getStatus() == KanbanCardStatus.HOLD) {
+            ensureCanManageHeldCard(actor, card);
         } else {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Вернуть в задачи этапа можно только карточку на согласовании.");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Вернуть в задачи этапа можно только карточку на согласовании или в отложенных.");
         }
 
         sessionEconomyService.releaseReservedResources(actor, card);
@@ -470,6 +491,67 @@ public class KanbanService {
                 actor,
                 assignee,
                 KanbanCardEventType.RETURNED_TO_STAGE,
+                fromStatus,
+                card.getStatus(),
+                null,
+                responsibleDepartment
+        );
+    }
+
+    private void holdCardForNextStage(SessionParticipant actor, TeamKanbanCard card) {
+        if (!HOLDABLE_STATUSES.contains(card.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Отложить можно только задачу, которая ещё не находится в активной работе или на согласовании.");
+        }
+
+        ensureCanManageHeldCard(actor, card);
+
+        KanbanCardStatus fromStatus = card.getStatus();
+        KanbanResponsibleDepartment responsibleDepartment = card.getResponsibleDepartment();
+        SessionParticipant targetParticipant = resolveHoldTargetParticipant(actor, card, responsibleDepartment);
+
+        sessionEconomyService.releaseReservedResources(actor, card);
+        card.holdForNextStage();
+        recordEvent(
+                card,
+                actor,
+                targetParticipant,
+                KanbanCardEventType.TASK_HELD,
+                fromStatus,
+                card.getStatus(),
+                null,
+                responsibleDepartment
+        );
+    }
+
+    private SessionParticipant resolveHoldTargetParticipant(
+            SessionParticipant actor,
+            TeamKanbanCard card,
+            KanbanResponsibleDepartment responsibleDepartment
+    ) {
+        SessionParticipant targetParticipant = card.getAssignee();
+        if (targetParticipant == null
+                && CHIEF_DOCTOR_ROLE.equals(actor.getGameRole())
+                && responsibleDepartment != null) {
+            targetParticipant = findTeamMemberByRole(card.getTeam(), DEPARTMENT_LEAD_ROLES.get(responsibleDepartment))
+                    .orElse(null);
+        }
+
+        return targetParticipant != null && targetParticipant.getId().equals(actor.getId())
+                ? null
+                : targetParticipant;
+    }
+
+    private void releaseHeldCardToStageBacklog(TeamKanbanCard card) {
+        KanbanCardStatus fromStatus = card.getStatus();
+        KanbanResponsibleDepartment responsibleDepartment = card.getResponsibleDepartment();
+
+        card.returnToStageBacklog();
+        card.getProblemState().updateStatus(toProblemStatus(card.getStatus()));
+        recordEvent(
+                card,
+                null,
+                null,
+                KanbanCardEventType.HOLD_RELEASED,
                 fromStatus,
                 card.getStatus(),
                 null,
@@ -627,6 +709,20 @@ public class KanbanService {
         }
     }
 
+    private void ensureCanManageHeldCard(SessionParticipant actor, TeamKanbanCard card) {
+        if (CHIEF_DOCTOR_ROLE.equals(actor.getGameRole())) {
+            return;
+        }
+
+        KanbanResponsibleDepartment responsibleDepartment = card.getResponsibleDepartment();
+        if (responsibleDepartment != null
+                && DEPARTMENT_LEAD_ROLES.get(responsibleDepartment).equals(actor.getGameRole())) {
+            return;
+        }
+
+        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Отложить или вернуть отложенную задачу могут только главврач и руководитель ответственного подразделения.");
+    }
+
     private boolean isSolutionSuccessful(TeamKanbanCard card, KanbanSolutionOption option) {
         double successProbability = resolveSuccessProbability(card, option).doubleValue();
 
@@ -723,6 +819,8 @@ public class KanbanService {
             case DEPARTMENT_APPROVED -> "%s согласовал задачу и передал главврачу".formatted(actorName);
             case SOLUTION_FAILED -> "%s проверил результат: решение не сработало, задача вернулась в задачи этапа".formatted(actorName);
             case CHIEF_DOCTOR_APPROVED -> "%s финально согласовал и закрыл задачу".formatted(actorName);
+            case TASK_HELD -> "%s отложил задачу на следующий этап".formatted(actorName);
+            case HOLD_RELEASED -> "Задача вернулась из отложенных в задачи этапа";
             case RETURNED_TO_STAGE -> "%s вернул задачу в задачи этапа".formatted(actorName);
         };
     }
@@ -734,6 +832,8 @@ public class KanbanService {
             case SENT_TO_DEPARTMENT_REVIEW, DEPARTMENT_APPROVED -> "Задача ожидает согласования";
             case SOLUTION_FAILED, RETURNED_TO_STAGE -> "Задача возвращена";
             case CHIEF_DOCTOR_APPROVED -> "Задача закрыта";
+            case TASK_HELD -> "Задача отложена";
+            case HOLD_RELEASED -> "Задача вернулась в этап";
             case PRIORITY_SET, WORK_STARTED, SOLUTION_SELECTED -> "Обновление задачи";
         };
     }
@@ -763,6 +863,8 @@ public class KanbanService {
             case SOLUTION_FAILED -> "%s проверил результат и вернул задачу в задачи этапа: %s, %s".formatted(actorName, problemTitle, roomName);
             case RETURNED_TO_STAGE -> "%s вернул задачу в задачи этапа: %s, %s".formatted(actorName, problemTitle, roomName);
             case CHIEF_DOCTOR_APPROVED -> "%s закрыл задачу: %s, %s".formatted(actorName, problemTitle, roomName);
+            case TASK_HELD -> "%s отложил задачу на следующий этап: %s, %s".formatted(actorName, problemTitle, roomName);
+            case HOLD_RELEASED -> "Задача вернулась из отложенных в задачи этапа: %s, %s".formatted(problemTitle, roomName);
             case PRIORITY_SET, WORK_STARTED, SOLUTION_SELECTED -> "%s: %s, %s".formatted(toHistoryMessage(event), problemTitle, roomName);
         };
     }
@@ -823,7 +925,7 @@ public class KanbanService {
     private SessionProblemStatus toProblemStatus(KanbanCardStatus status) {
         return switch (status) {
             case DONE -> SessionProblemStatus.RESOLVED;
-            case REGISTERED, ASSIGNED, READY_FOR_WORK, REWORK -> SessionProblemStatus.ACTIVE;
+            case REGISTERED, ASSIGNED, READY_FOR_WORK, REWORK, HOLD -> SessionProblemStatus.ACTIVE;
             case IN_PROGRESS, DEPARTMENT_REVIEW, CHIEF_DOCTOR_REVIEW -> SessionProblemStatus.IN_PROGRESS;
         };
     }

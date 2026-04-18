@@ -8,5 +8,6 @@ public enum KanbanCardStatus {
     DEPARTMENT_REVIEW,
     CHIEF_DOCTOR_REVIEW,
     REWORK,
+    HOLD,
     DONE
 }

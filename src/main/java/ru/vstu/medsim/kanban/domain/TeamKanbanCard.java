@@ -95,6 +95,11 @@ public class TeamKanbanCard {
         updateStatus(KanbanCardStatus.IN_PROGRESS);
     }
 
+    public void holdForNextStage() {
+        this.assignee = null;
+        updateStatus(KanbanCardStatus.HOLD);
+    }
+
     public void markResourcesSpent() {
         if (resourcesSpentAt == null) {
             resourcesSpentAt = LocalDateTime.now();
