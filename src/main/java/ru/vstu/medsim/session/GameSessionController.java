@@ -16,6 +16,7 @@ import ru.vstu.medsim.economy.dto.GameSessionEconomyResponse;
 import ru.vstu.medsim.kanban.KanbanService;
 import ru.vstu.medsim.kanban.dto.GameSessionKanbanResponse;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
+import ru.vstu.medsim.session.dto.GameSessionInventorySettingsRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
 import ru.vstu.medsim.session.dto.GameSessionRenameRequest;
@@ -120,6 +121,19 @@ public class GameSessionController {
             @Valid @RequestBody GameSessionStageSettingsRequest request
     ) {
         return gameSessionCommandService.saveStageSettings(sessionCode, request);
+    }
+
+    @PutMapping("/{sessionCode}/inventory")
+    public GameSessionParticipantsResponse updateInventorySettings(
+            @PathVariable String sessionCode,
+            @Valid @RequestBody GameSessionInventorySettingsRequest request
+    ) {
+        return gameSessionCommandService.updateInventorySettings(sessionCode, request);
+    }
+
+    @PostMapping("/{sessionCode}/inventory/randomize")
+    public GameSessionParticipantsResponse randomizeInventory(@PathVariable String sessionCode) {
+        return gameSessionCommandService.randomizeInventory(sessionCode);
     }
 
     @PostMapping("/{sessionCode}/roles/random")

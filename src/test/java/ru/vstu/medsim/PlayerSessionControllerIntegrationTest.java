@@ -160,12 +160,39 @@ class PlayerSessionControllerIntegrationTest {
                 String.class,
                 sessionCode
         );
+        List<String> firstTeamInventory = jdbcTemplate.queryForList(
+                """
+                SELECT ti.item_name || ':' || ti.quantity
+                FROM team_inventory_items ti
+                JOIN session_teams st ON st.id = ti.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.sort_order = 1
+                ORDER BY ti.item_name
+                """,
+                String.class,
+                sessionCode
+        );
+        List<String> secondTeamInventory = jdbcTemplate.queryForList(
+                """
+                SELECT ti.item_name || ':' || ti.quantity
+                FROM team_inventory_items ti
+                JOIN session_teams st ON st.id = ti.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.sort_order = 2
+                ORDER BY ti.item_name
+                """,
+                String.class,
+                sessionCode
+        );
 
         Set<String> allowedItems = Set.copyOf(new TeamInventoryCatalog().getAllItemNames());
 
-        assertThat(inventoryCount).isEqualTo(12);
-        assertThat(itemCountsPerTeam).containsExactly(6, 6);
+        assertThat(inventoryCount).isEqualTo(allowedItems.size() * 2);
+        assertThat(itemCountsPerTeam).containsExactly(allowedItems.size(), allowedItems.size());
         assertThat(itemNames).allMatch(allowedItems::contains);
+        assertThat(firstTeamInventory).containsExactlyElementsOf(secondTeamInventory);
     }
 
     @Test
@@ -196,7 +223,7 @@ class PlayerSessionControllerIntegrationTest {
         mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, annaId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.inventoryVisible").value(true))
-                .andExpect(jsonPath("$.teamInventory.length()").value(6))
+                .andExpect(jsonPath("$.teamInventory.length()").value(new TeamInventoryCatalog().getAllItemNames().size()))
                 .andExpect(jsonPath("$.teamInventory[0].itemName").isNotEmpty());
 
         mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, olgaId))
@@ -359,7 +386,7 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].roomName").value("Рентген"))
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].problems.length()").value(3))
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].problems[0].stageNumber").value(1))
-                .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(10))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(37))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].stageNumber").value(1));
     }
 
@@ -373,7 +400,7 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.teams.length()").value(2))
                 .andExpect(jsonPath("$.teams[0].teamId").value(firstTeamId(sessionCode)))
-                .andExpect(jsonPath("$.teams[0].teamKanbanBoard.cards.length()").value(10));
+                .andExpect(jsonPath("$.teams[0].teamKanbanBoard.cards.length()").value(37));
     }
 
     @Test
@@ -386,7 +413,7 @@ class PlayerSessionControllerIntegrationTest {
         mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, chiefDoctorId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionRuntime.activeStageInteractionMode").value("CHAT_WITH_PROBLEMS"))
-                .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(10))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(19))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].stageNumber").value(1))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].priority").value(nullValue()))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].solutionOptions.length()").value(2))
@@ -1470,7 +1497,145 @@ class PlayerSessionControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.stages.length()").value(2));
+                .andExpect(jsonPath("$.stages.length()").value(2))
+                .andExpect(jsonPath("$.stages[0].problemCount").value(19))
+                .andExpect(jsonPath("$.stages[1].problemCount").value(18));
+    }
+
+    @Test
+    void shouldSaveManualProblemDistributionForSession() throws Exception {
+        String sessionCode = createSession("Ручные задачи", 2);
+
+        var request = Map.of(
+                "stages", List.of(
+                        Map.of(
+                                "stageNumber", 1,
+                                "durationMinutes", 12,
+                                "interactionMode", "CHAT_WITH_PROBLEMS",
+                                "problemCount", 5
+                        ),
+                        Map.of(
+                                "stageNumber", 2,
+                                "durationMinutes", 20,
+                                "interactionMode", "CHAT_AND_KANBAN",
+                                "problemCount", 12
+                        ),
+                        Map.of(
+                                "stageNumber", 3,
+                                "durationMinutes", 20,
+                                "interactionMode", "CHAT_AND_KANBAN",
+                                "problemCount", 20
+                        )
+                )
+        );
+
+        mockMvc.perform(put("/api/game-sessions/{sessionCode}/stages", sessionCode)
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalProblemCount").value(37))
+                .andExpect(jsonPath("$.stages[0].problemCount").value(5))
+                .andExpect(jsonPath("$.stages[1].problemCount").value(12))
+                .andExpect(jsonPath("$.stages[2].problemCount").value(20));
+
+        List<Integer> firstTeamCounts = jdbcTemplate.queryForList(
+                """
+                SELECT COUNT(*)
+                FROM team_problem_states tps
+                JOIN team_room_states trs ON trs.id = tps.team_room_state_id
+                JOIN session_teams st ON st.id = trs.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.sort_order = 1
+                GROUP BY tps.stage_number
+                ORDER BY tps.stage_number
+                """,
+                Integer.class,
+                sessionCode
+        );
+
+        assertThat(firstTeamCounts).containsExactly(5, 12, 20);
+    }
+
+    @Test
+    void shouldRejectManualProblemDistributionWithWrongTotal() throws Exception {
+        String sessionCode = createSession("Ошибочные задачи", 2);
+
+        var request = Map.of(
+                "stages", List.of(
+                        Map.of(
+                                "stageNumber", 1,
+                                "durationMinutes", 12,
+                                "interactionMode", "CHAT_WITH_PROBLEMS",
+                                "problemCount", 5
+                        ),
+                        Map.of(
+                                "stageNumber", 2,
+                                "durationMinutes", 20,
+                                "interactionMode", "CHAT_AND_KANBAN",
+                                "problemCount", 5
+                        )
+                )
+        );
+
+        mockMvc.perform(put("/api/game-sessions/{sessionCode}/stages", sessionCode)
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void shouldUpdateInventoryForEveryTeamWithManualSettings() throws Exception {
+        String sessionCode = createSession("Ручной склад", 2);
+        List<String> itemNames = new TeamInventoryCatalog().getAllItemNames();
+        List<Map<String, Object>> items = new java.util.ArrayList<>();
+
+        for (int index = 0; index < itemNames.size(); index++) {
+            items.add(Map.<String, Object>of(
+                    "itemName", itemNames.get(index),
+                    "quantity", index
+            ));
+        }
+
+        mockMvc.perform(put("/api/game-sessions/{sessionCode}/inventory", sessionCode)
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("items", items))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.inventoryItems.length()").value(itemNames.size()))
+                .andExpect(jsonPath("$.inventoryItems[0].itemName").value(itemNames.get(0)))
+                .andExpect(jsonPath("$.inventoryItems[0].quantity").value(0));
+
+        List<String> firstTeamInventory = jdbcTemplate.queryForList(
+                """
+                SELECT ti.item_name || ':' || ti.quantity
+                FROM team_inventory_items ti
+                JOIN session_teams st ON st.id = ti.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.sort_order = 1
+                ORDER BY ti.item_name
+                """,
+                String.class,
+                sessionCode
+        );
+        List<String> secondTeamInventory = jdbcTemplate.queryForList(
+                """
+                SELECT ti.item_name || ':' || ti.quantity
+                FROM team_inventory_items ti
+                JOIN session_teams st ON st.id = ti.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.sort_order = 2
+                ORDER BY ti.item_name
+                """,
+                String.class,
+                sessionCode
+        );
+
+        assertThat(firstTeamInventory).containsExactlyElementsOf(secondTeamInventory);
     }
 
     @Test

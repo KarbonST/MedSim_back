@@ -18,6 +18,7 @@ import ru.vstu.medsim.session.domain.SessionStageSetting;
 import ru.vstu.medsim.session.domain.SessionTeam;
 import ru.vstu.medsim.session.domain.TeamInventoryItem;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
+import ru.vstu.medsim.session.dto.GameSessionInventorySettingsRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
 import ru.vstu.medsim.session.dto.GameSessionRenameRequest;
@@ -233,10 +234,14 @@ public class GameSessionCommandService {
     ) {
         GameSession session = getLobbySessionOrThrow(sessionCode);
         validateStageSettings(request.stages());
+        List<GameSessionStageSettingsRequest.StageItem> orderedStages = request.stages().stream()
+                .sorted(Comparator.comparing(GameSessionStageSettingsRequest.StageItem::stageNumber))
+                .toList();
+        List<Integer> problemDistribution = resolveProblemDistribution(orderedStages);
 
         sessionStageSettingRepository.deleteAllByGameSessionId(session.getId());
 
-        List<SessionStageSetting> stageSettings = request.stages().stream()
+        List<SessionStageSetting> stageSettings = orderedStages.stream()
                 .map(stage -> new SessionStageSetting(
                         session,
                         stage.stageNumber(),
@@ -246,11 +251,34 @@ public class GameSessionCommandService {
                 .toList();
 
         sessionStageSettingRepository.saveAll(stageSettings);
+        sessionEconomyService.redistributeProblemsForSession(session.getId(), problemDistribution);
 
         SessionStageSetting firstStage = stageSettings.get(0);
         session.initializeStageRuntime(firstStage.getStageNumber(), firstStage.getDurationMinutes());
         gameSessionRepository.save(session);
         sessionEconomyService.resetStageTimeForSession(session.getId());
+
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
+    public GameSessionParticipantsResponse updateInventorySettings(
+            String sessionCode,
+            GameSessionInventorySettingsRequest request
+    ) {
+        GameSession session = getLobbySessionOrThrow(sessionCode);
+        List<TeamInventoryCatalog.InventorySeed> inventory = normalizeInventoryItems(request.items());
+
+        replaceTeamInventory(session, inventory);
+
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
+    public GameSessionParticipantsResponse randomizeInventory(String sessionCode) {
+        GameSession session = getLobbySessionOrThrow(sessionCode);
+
+        replaceTeamInventory(session, teamInventoryCatalog.generateInitialInventory());
 
         return gameSessionQueryService.getParticipants(sessionCode);
     }
@@ -706,6 +734,29 @@ public class GameSessionCommandService {
         }
     }
 
+    private List<Integer> resolveProblemDistribution(List<GameSessionStageSettingsRequest.StageItem> orderedStages) {
+        boolean hasManualProblemCounts = orderedStages.stream()
+                .anyMatch(stage -> stage.problemCount() != null);
+
+        if (!hasManualProblemCounts) {
+            return sessionEconomyService.buildEvenProblemDistribution(orderedStages.size());
+        }
+
+        boolean hasIncompleteManualCounts = orderedStages.stream()
+                .anyMatch(stage -> stage.problemCount() == null);
+
+        if (hasIncompleteManualCounts) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Для ручного распределения укажите количество задач для каждого этапа."
+            );
+        }
+
+        return orderedStages.stream()
+                .map(GameSessionStageSettingsRequest.StageItem::problemCount)
+                .toList();
+    }
+
     private GameSession getLobbySessionOrThrow(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
 
@@ -733,12 +784,66 @@ public class GameSessionCommandService {
     }
 
     private void initializeTeamInventory(List<SessionTeam> teams) {
+        saveInventoryForTeams(teams, teamInventoryCatalog.generateInitialInventory());
+    }
+
+    private void replaceTeamInventory(GameSession session, List<TeamInventoryCatalog.InventorySeed> inventory) {
+        List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId());
+        teamInventoryItemRepository.deleteAllByTeamGameSessionId(session.getId());
+        saveInventoryForTeams(teams, inventory);
+    }
+
+    private void saveInventoryForTeams(
+            List<SessionTeam> teams,
+            List<TeamInventoryCatalog.InventorySeed> inventory
+    ) {
         List<TeamInventoryItem> inventoryItems = teams.stream()
-                .flatMap(team -> teamInventoryCatalog.generateInitialInventory().stream()
+                .flatMap(team -> inventory.stream()
                         .map(seed -> new TeamInventoryItem(team, seed.itemName(), seed.quantity())))
                 .toList();
 
         teamInventoryItemRepository.saveAll(inventoryItems);
+    }
+
+    private List<TeamInventoryCatalog.InventorySeed> normalizeInventoryItems(
+            List<GameSessionInventorySettingsRequest.InventoryItem> items
+    ) {
+        Map<String, Integer> requestedQuantitiesByName = new HashMap<>();
+
+        for (GameSessionInventorySettingsRequest.InventoryItem item : items) {
+            String normalizedItemName = item.itemName().trim().toLowerCase();
+            if (requestedQuantitiesByName.put(normalizedItemName, item.quantity()) != null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Позиция склада '%s' указана несколько раз.".formatted(item.itemName().trim())
+                );
+            }
+        }
+
+        List<TeamInventoryCatalog.InventorySeed> normalizedInventory = new ArrayList<>();
+        List<String> knownItemNames = teamInventoryCatalog.getAllItemNames();
+
+        for (String knownItemName : knownItemNames) {
+            Integer quantity = requestedQuantitiesByName.remove(knownItemName.toLowerCase());
+            if (quantity == null) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Укажите количество для позиции склада: %s.".formatted(knownItemName)
+                );
+            }
+
+            normalizedInventory.add(new TeamInventoryCatalog.InventorySeed(knownItemName, quantity));
+        }
+
+        if (!requestedQuantitiesByName.isEmpty()) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "В настройках склада есть неизвестные позиции: %s."
+                            .formatted(String.join(", ", requestedQuantitiesByName.keySet()))
+            );
+        }
+
+        return normalizedInventory;
     }
 
     private GameSessionSummaryResponse toSummary(GameSession session) {

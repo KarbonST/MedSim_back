@@ -10,6 +10,8 @@ public record GameSessionParticipantsResponse(
         List<SessionTeamItem> teams,
         List<GameSessionParticipantItem> participants,
         List<SessionStageSettingItem> stages,
-        SessionRuntimeItem sessionRuntime
+        SessionRuntimeItem sessionRuntime,
+        Integer totalProblemCount,
+        List<SessionInventoryItem> inventoryItems
 ) {
 }

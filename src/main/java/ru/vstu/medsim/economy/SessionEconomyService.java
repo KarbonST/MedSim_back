@@ -164,6 +164,73 @@ public class SessionEconomyService {
                 .forEach(teamEconomyState -> teamEconomyState.resetStageTime(settings.getStageTimeUnits()));
     }
 
+    @Transactional
+    public void redistributeProblemsForSession(Long gameSessionId, List<Integer> stageProblemCounts) {
+        validateProblemDistribution(stageProblemCounts);
+
+        int totalProblemCount = getTotalProblemTemplateCount();
+        int requestedProblemCount = stageProblemCounts.stream()
+                .mapToInt(Integer::intValue)
+                .sum();
+
+        if (requestedProblemCount != totalProblemCount) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Распределите все задачи по этапам: указано %d из %d."
+                            .formatted(requestedProblemCount, totalProblemCount)
+            );
+        }
+
+        List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(gameSessionId);
+
+        for (SessionTeam team : teams) {
+            List<TeamProblemState> problemStates = teamProblemStateRepository
+                    .findAllByTeamRoomStateTeamIdOrderByTeamRoomStateClinicRoomSortOrderAscProblemTemplateProblemNumberAscIdAsc(team.getId());
+
+            if (problemStates.size() != totalProblemCount) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Количество задач команды '%s' не совпадает с шаблоном игры.".formatted(team.getName())
+                );
+            }
+
+            int problemIndex = 0;
+            for (int stageIndex = 0; stageIndex < stageProblemCounts.size(); stageIndex++) {
+                int stageNumber = stageIndex + 1;
+                int problemCount = stageProblemCounts.get(stageIndex);
+                for (int index = 0; index < problemCount; index++) {
+                    problemStates.get(problemIndex).assignStageNumber(stageNumber);
+                    problemIndex++;
+                }
+            }
+
+            teamProblemStateRepository.saveAll(problemStates);
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public List<Integer> buildEvenProblemDistribution(int stageCount) {
+        if (stageCount < 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Количество этапов должно быть больше нуля.");
+        }
+
+        int totalProblemCount = getTotalProblemTemplateCount();
+        int baseProblemCount = totalProblemCount / stageCount;
+        int remainder = totalProblemCount % stageCount;
+        List<Integer> distribution = new ArrayList<>();
+
+        for (int index = 0; index < stageCount; index++) {
+            distribution.add(baseProblemCount + (index < remainder ? 1 : 0));
+        }
+
+        return distribution;
+    }
+
+    @Transactional(readOnly = true)
+    public int getTotalProblemTemplateCount() {
+        return Math.toIntExact(clinicRoomProblemTemplateRepository.count());
+    }
+
     @Transactional(readOnly = true)
     public Optional<TeamResourceReservation> getCurrentReservation(TeamKanbanCard card) {
         return teamResourceReservationRepository.findFirstByKanbanCardIdAndStatusInOrderByUpdatedAtDescIdDesc(
@@ -219,7 +286,7 @@ public class SessionEconomyService {
                 actor,
                 card,
                 TeamEconomyEventType.TASK_RESOURCES_RESERVED,
-                card.getProblemState().getProblemTemplate().getStageNumber(),
+                card.getProblemState().getStageNumber(),
                 BigDecimal.ZERO.setScale(2),
                 0,
                 option.getRequiredItemName(),
@@ -279,7 +346,7 @@ public class SessionEconomyService {
                 actor,
                 card,
                 TeamEconomyEventType.TASK_RESERVATION_COMMITTED,
-                card.getProblemState().getProblemTemplate().getStageNumber(),
+                card.getProblemState().getStageNumber(),
                 reservation.getBudgetAmount().negate(),
                 -reservation.getTimeUnits(),
                 inventoryItem != null ? inventoryItem.getItemName() : null,
@@ -474,7 +541,7 @@ public class SessionEconomyService {
                 .setScale(2, RoundingMode.HALF_UP);
 
         List<TeamProblemState> currentStageProblems = problemStates.stream()
-                .filter(problemState -> problemState.getProblemTemplate().getStageNumber().equals(stageNumber))
+                .filter(problemState -> problemState.getStageNumber().equals(stageNumber))
                 .toList();
 
         BigDecimal bonus = !currentStageProblems.isEmpty() && currentStageProblems.stream()
@@ -578,7 +645,7 @@ public class SessionEconomyService {
                 .map(problemState -> new TeamProblemEconomyItem(
                         problemState.getId(),
                         problemState.getProblemTemplate().getProblemNumber(),
-                        problemState.getProblemTemplate().getStageNumber(),
+                        problemState.getStageNumber(),
                         problemState.getProblemTemplate().getTitle(),
                         problemState.getProblemTemplate().getSeverity().name(),
                         problemState.getProblemTemplate().getBudgetCost(),
@@ -614,8 +681,21 @@ public class SessionEconomyService {
     }
 
     private boolean isReleasedByStage(TeamProblemState problemState, Integer stageNumber) {
-        Integer problemStageNumber = problemState.getProblemTemplate().getStageNumber();
+        Integer problemStageNumber = problemState.getStageNumber();
         return stageNumber == null || problemStageNumber == null || problemStageNumber <= stageNumber;
+    }
+
+    private void validateProblemDistribution(List<Integer> stageProblemCounts) {
+        if (stageProblemCounts == null || stageProblemCounts.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Укажите распределение задач по этапам.");
+        }
+
+        boolean hasNegativeCount = stageProblemCounts.stream()
+                .anyMatch(problemCount -> problemCount == null || problemCount < 0);
+
+        if (hasNegativeCount) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Количество задач на этапе не может быть отрицательным.");
+        }
     }
 
     private Optional<String> resolveResourceBlocker(
@@ -664,7 +744,7 @@ public class SessionEconomyService {
                 actor,
                 card,
                 TeamEconomyEventType.TASK_RESERVATION_RELEASED,
-                card.getProblemState().getProblemTemplate().getStageNumber(),
+                card.getProblemState().getStageNumber(),
                 BigDecimal.ZERO.setScale(2),
                 0,
                 reservation.getItemName(),

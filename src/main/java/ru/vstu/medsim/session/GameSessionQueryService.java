@@ -9,16 +9,21 @@ import ru.vstu.medsim.player.domain.GameSession;
 import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.player.repository.GameSessionRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
+import ru.vstu.medsim.economy.repository.ClinicRoomProblemTemplateRepository;
+import ru.vstu.medsim.economy.repository.TeamProblemStateRepository;
+import ru.vstu.medsim.session.domain.TeamInventoryItem;
 import ru.vstu.medsim.session.domain.SessionStageSetting;
 import ru.vstu.medsim.session.domain.SessionTeam;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
 import ru.vstu.medsim.session.dto.GameSessionParticipantsResponse;
 import ru.vstu.medsim.session.dto.GameSessionSummaryResponse;
+import ru.vstu.medsim.session.dto.SessionInventoryItem;
 import ru.vstu.medsim.session.dto.SessionRuntimeItem;
 import ru.vstu.medsim.session.dto.SessionStageSettingItem;
 import ru.vstu.medsim.session.dto.SessionTeamItem;
 import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
 import ru.vstu.medsim.session.repository.SessionTeamRepository;
+import ru.vstu.medsim.session.repository.TeamInventoryItemRepository;
 
 import java.util.List;
 import java.util.Map;
@@ -33,19 +38,31 @@ public class GameSessionQueryService {
     private final SessionStageSettingRepository sessionStageSettingRepository;
     private final SessionTeamRepository sessionTeamRepository;
     private final SessionRuntimeSnapshotService sessionRuntimeSnapshotService;
+    private final ClinicRoomProblemTemplateRepository clinicRoomProblemTemplateRepository;
+    private final TeamProblemStateRepository teamProblemStateRepository;
+    private final TeamInventoryItemRepository teamInventoryItemRepository;
+    private final TeamInventoryCatalog teamInventoryCatalog;
 
     public GameSessionQueryService(
             GameSessionRepository gameSessionRepository,
             SessionParticipantRepository sessionParticipantRepository,
             SessionStageSettingRepository sessionStageSettingRepository,
             SessionTeamRepository sessionTeamRepository,
-            SessionRuntimeSnapshotService sessionRuntimeSnapshotService
+            SessionRuntimeSnapshotService sessionRuntimeSnapshotService,
+            ClinicRoomProblemTemplateRepository clinicRoomProblemTemplateRepository,
+            TeamProblemStateRepository teamProblemStateRepository,
+            TeamInventoryItemRepository teamInventoryItemRepository,
+            TeamInventoryCatalog teamInventoryCatalog
     ) {
         this.gameSessionRepository = gameSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.sessionStageSettingRepository = sessionStageSettingRepository;
         this.sessionTeamRepository = sessionTeamRepository;
         this.sessionRuntimeSnapshotService = sessionRuntimeSnapshotService;
+        this.clinicRoomProblemTemplateRepository = clinicRoomProblemTemplateRepository;
+        this.teamProblemStateRepository = teamProblemStateRepository;
+        this.teamInventoryItemRepository = teamInventoryItemRepository;
+        this.teamInventoryCatalog = teamInventoryCatalog;
     }
 
     @Transactional(readOnly = true)
@@ -87,12 +104,15 @@ public class GameSessionQueryService {
 
         List<SessionStageSetting> stageEntities = sessionStageSettingRepository
                 .findAllByGameSessionIdOrderByStageNumberAsc(session.getId());
+        Map<Integer, Integer> problemCountsByStage = resolveProblemCountsByStage(teamsSource);
 
         List<SessionStageSettingItem> stages = stageEntities.stream()
-                .map(this::toStageItem)
+                .map(stage -> toStageItem(stage, problemCountsByStage))
                 .toList();
 
         SessionRuntimeItem sessionRuntime = sessionRuntimeSnapshotService.buildRuntime(session, stageEntities);
+        int totalProblemCount = Math.toIntExact(clinicRoomProblemTemplateRepository.count());
+        List<SessionInventoryItem> inventoryItems = resolveInventoryItems(teamsSource);
 
         return new GameSessionParticipantsResponse(
                 session.getId(),
@@ -102,7 +122,9 @@ public class GameSessionQueryService {
                 teams,
                 participants,
                 stages,
-                sessionRuntime
+                sessionRuntime,
+                totalProblemCount,
+                inventoryItems
         );
     }
 
@@ -138,12 +160,55 @@ public class GameSessionQueryService {
         );
     }
 
-    private SessionStageSettingItem toStageItem(SessionStageSetting stageSetting) {
+    private SessionStageSettingItem toStageItem(
+            SessionStageSetting stageSetting,
+            Map<Integer, Integer> problemCountsByStage
+    ) {
         return new SessionStageSettingItem(
                 stageSetting.getStageNumber(),
                 stageSetting.getDurationMinutes(),
-                stageSetting.getInteractionMode().name()
+                stageSetting.getInteractionMode().name(),
+                problemCountsByStage.getOrDefault(stageSetting.getStageNumber(), 0)
         );
+    }
+
+    private Map<Integer, Integer> resolveProblemCountsByStage(List<SessionTeam> teams) {
+        if (teams.isEmpty()) {
+            return Map.of();
+        }
+
+        return teamProblemStateRepository
+                .findAllByTeamRoomStateTeamIdOrderByTeamRoomStateClinicRoomSortOrderAscProblemTemplateProblemNumberAscIdAsc(
+                        teams.get(0).getId()
+                )
+                .stream()
+                .collect(Collectors.groupingBy(
+                        problemState -> problemState.getStageNumber(),
+                        Collectors.collectingAndThen(Collectors.counting(), Long::intValue)
+                ));
+    }
+
+    private List<SessionInventoryItem> resolveInventoryItems(List<SessionTeam> teams) {
+        if (teams.isEmpty()) {
+            return teamInventoryCatalog.getAllItemNames().stream()
+                    .map(itemName -> new SessionInventoryItem(itemName, 0))
+                    .toList();
+        }
+
+        Map<String, TeamInventoryItem> inventoryByName = teamInventoryItemRepository
+                .findAllByTeamIdOrderByItemNameAsc(teams.get(0).getId())
+                .stream()
+                .collect(Collectors.toMap(
+                        item -> item.getItemName().toLowerCase(),
+                        Function.identity()
+                ));
+
+        return teamInventoryCatalog.getAllItemNames().stream()
+                .map(itemName -> {
+                    TeamInventoryItem item = inventoryByName.get(itemName.toLowerCase());
+                    return new SessionInventoryItem(itemName, item != null ? item.getQuantity() : 0);
+                })
+                .toList();
     }
 
     String normalizeCode(String sessionCode) {

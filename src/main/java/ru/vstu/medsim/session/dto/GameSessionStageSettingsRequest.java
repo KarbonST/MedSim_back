@@ -14,7 +14,8 @@ public record GameSessionStageSettingsRequest(
     public record StageItem(
             @NotNull @Min(1) Integer stageNumber,
             @NotNull @Min(1) Integer durationMinutes,
-            @NotNull StageInteractionMode interactionMode
+            @NotNull StageInteractionMode interactionMode,
+            @Min(0) Integer problemCount
     ) {
     }
 }

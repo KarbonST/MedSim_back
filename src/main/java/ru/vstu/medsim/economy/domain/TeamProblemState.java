@@ -34,6 +34,9 @@ public class TeamProblemState {
     @Column(name = "status", nullable = false, length = 30)
     private SessionProblemStatus status;
 
+    @Column(name = "stage_number", nullable = false)
+    private Integer stageNumber;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -44,9 +47,19 @@ public class TeamProblemState {
     }
 
     public TeamProblemState(TeamRoomState teamRoomState, ClinicRoomProblemTemplate problemTemplate, SessionProblemStatus status) {
+        this(teamRoomState, problemTemplate, status, problemTemplate.getStageNumber());
+    }
+
+    public TeamProblemState(
+            TeamRoomState teamRoomState,
+            ClinicRoomProblemTemplate problemTemplate,
+            SessionProblemStatus status,
+            Integer stageNumber
+    ) {
         this.teamRoomState = teamRoomState;
         this.problemTemplate = problemTemplate;
         this.status = status;
+        this.stageNumber = stageNumber;
     }
 
     public void updateStatus(SessionProblemStatus status) {
@@ -54,6 +67,10 @@ public class TeamProblemState {
         this.resolvedAt = status == SessionProblemStatus.RESOLVED
                 ? LocalDateTime.now()
                 : null;
+    }
+
+    public void assignStageNumber(Integer stageNumber) {
+        this.stageNumber = stageNumber;
     }
 
     @PrePersist
@@ -77,6 +94,10 @@ public class TeamProblemState {
 
     public SessionProblemStatus getStatus() {
         return status;
+    }
+
+    public Integer getStageNumber() {
+        return stageNumber;
     }
 
     public LocalDateTime getCreatedAt() {

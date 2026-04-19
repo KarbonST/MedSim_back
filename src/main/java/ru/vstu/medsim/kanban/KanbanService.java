@@ -597,7 +597,7 @@ public class KanbanService {
                 card.getId(),
                 card.getProblemState().getId(),
                 problemTemplate.getProblemNumber(),
-                problemTemplate.getStageNumber(),
+                card.getProblemState().getStageNumber(),
                 problemTemplate.getTitle(),
                 card.getProblemState().getTeamRoomState().getClinicRoom().getCode(),
                 card.getProblemState().getTeamRoomState().getClinicRoom().getName(),
@@ -901,7 +901,7 @@ public class KanbanService {
             return true;
         }
 
-        Integer cardStageNumber = card.getProblemState().getProblemTemplate().getStageNumber();
+        Integer cardStageNumber = card.getProblemState().getStageNumber();
         return cardStageNumber == null || cardStageNumber <= activeStageNumber;
     }
 

@@ -10,8 +10,6 @@ import java.util.concurrent.ThreadLocalRandom;
 @Component
 public class TeamInventoryCatalog {
 
-    private static final int DEFAULT_ITEM_COUNT = 6;
-
     private static final List<InventoryTemplate> INVENTORY_TEMPLATES = List.of(
             new InventoryTemplate("Антисептик", 0),
             new InventoryTemplate("Ведра для отходов", 2),
@@ -33,11 +31,10 @@ public class TeamInventoryCatalog {
     );
 
     public List<InventorySeed> generateInitialInventory() {
-        List<InventoryTemplate> shuffledTemplates = new ArrayList<>(INVENTORY_TEMPLATES);
-        Collections.shuffle(shuffledTemplates, ThreadLocalRandom.current());
+        List<InventoryTemplate> templates = new ArrayList<>(INVENTORY_TEMPLATES);
+        Collections.shuffle(templates, ThreadLocalRandom.current());
 
-        return shuffledTemplates.stream()
-                .limit(DEFAULT_ITEM_COUNT)
+        return templates.stream()
                 .map(template -> new InventorySeed(template.itemName(), randomQuantity(template.baseQuantity())))
                 .toList();
     }
@@ -50,7 +47,7 @@ public class TeamInventoryCatalog {
 
     private int randomQuantity(int baseQuantity) {
         int upperBound = Math.max(1, Math.min(Math.max(baseQuantity, 1), 5));
-        return ThreadLocalRandom.current().nextInt(1, upperBound + 1);
+        return ThreadLocalRandom.current().nextInt(0, upperBound + 1);
     }
 
     private record InventoryTemplate(String itemName, int baseQuantity) {

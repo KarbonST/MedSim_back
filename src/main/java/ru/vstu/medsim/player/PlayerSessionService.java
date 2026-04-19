@@ -233,7 +233,8 @@ public class PlayerSessionService {
                 .map(stage -> new SessionStageSettingItem(
                         stage.getStageNumber(),
                         stage.getDurationMinutes(),
-                        stage.getInteractionMode().name()
+                        stage.getInteractionMode().name(),
+                        null
                 ))
                 .toList();
 
