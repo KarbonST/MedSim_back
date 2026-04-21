@@ -15,6 +15,7 @@ import ru.vstu.medsim.player.repository.GameSessionRepository;
 import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.domain.SessionStageSetting;
+import ru.vstu.medsim.session.domain.StageInteractionMode;
 import ru.vstu.medsim.session.domain.SessionTeam;
 import ru.vstu.medsim.session.domain.TeamInventoryItem;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
@@ -50,6 +51,8 @@ public class GameSessionCommandService {
     private static final int SESSION_CODE_PREFIX_LENGTH = 4;
     private static final int SESSION_CODE_MAX_ATTEMPTS = 200;
     private static final SecureRandom SESSION_CODE_RANDOM = new SecureRandom();
+    private static final int DEFAULT_STAGE_COUNT = 3;
+    private static final int DEFAULT_STAGE_DURATION_MINUTES = 15;
 
     private static final List<String> TEAM_NAME_ADJECTIVES = List.of(
             "Бодрые",
@@ -137,6 +140,16 @@ public class GameSessionCommandService {
                 request.stageTimeUnits()
         );
         kanbanService.initializeCardsForProblemStates(problemStates);
+        List<SessionStageSetting> defaultStageSettings = sessionStageSettingRepository.saveAll(
+                createDefaultStageSettings(session)
+        );
+        sessionEconomyService.redistributeProblemsForSession(
+                session.getId(),
+                sessionEconomyService.buildEvenProblemDistribution(DEFAULT_STAGE_COUNT)
+        );
+        SessionStageSetting firstStage = defaultStageSettings.get(0);
+        session.initializeStageRuntime(firstStage.getStageNumber(), firstStage.getDurationMinutes());
+        gameSessionRepository.save(session);
 
         return toSummary(session);
     }
@@ -240,6 +253,7 @@ public class GameSessionCommandService {
         List<Integer> problemDistribution = resolveProblemDistribution(orderedStages);
 
         sessionStageSettingRepository.deleteAllByGameSessionId(session.getId());
+        sessionStageSettingRepository.flush();
 
         List<SessionStageSetting> stageSettings = orderedStages.stream()
                 .map(stage -> new SessionStageSetting(
@@ -855,6 +869,29 @@ public class GameSessionCommandService {
                 sessionParticipantRepository.countByGameSessionId(session.getId()),
                 sessionTeamRepository.countByGameSessionId(session.getId()),
                 sessionStageSettingRepository.countByGameSessionId(session.getId())
+        );
+    }
+
+    private List<SessionStageSetting> createDefaultStageSettings(GameSession session) {
+        return List.of(
+                new SessionStageSetting(
+                        session,
+                        1,
+                        DEFAULT_STAGE_DURATION_MINUTES,
+                        StageInteractionMode.CHAT_WITH_PROBLEMS
+                ),
+                new SessionStageSetting(
+                        session,
+                        2,
+                        DEFAULT_STAGE_DURATION_MINUTES,
+                        StageInteractionMode.CHAT_AND_KANBAN
+                ),
+                new SessionStageSetting(
+                        session,
+                        3,
+                        DEFAULT_STAGE_DURATION_MINUTES,
+                        StageInteractionMode.CHAT_AND_KANBAN
+                )
         );
     }
 

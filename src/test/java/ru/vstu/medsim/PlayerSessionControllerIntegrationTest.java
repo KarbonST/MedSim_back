@@ -83,14 +83,31 @@ class PlayerSessionControllerIntegrationTest {
         assertThat(sessionCode).matches("[A-Z]{4}-\\d{2}");
         assertThat(count("game_sessions")).isEqualTo(1);
         assertThat(count("session_teams")).isEqualTo(3);
+        assertThat(count("session_stage_settings")).isEqualTo(3);
 
         List<String> teamNames = jdbcTemplate.queryForList(
                 "SELECT name FROM session_teams ORDER BY sort_order",
                 String.class
         );
+        List<String> stageSettings = jdbcTemplate.queryForList(
+                """
+                SELECT stage_number || ':' || interaction_mode
+                FROM session_stage_settings sss
+                JOIN game_sessions gs ON gs.id = sss.game_session_id
+                WHERE gs.code = ?
+                ORDER BY stage_number
+                """,
+                String.class,
+                sessionCode
+        );
 
         assertThat(teamNames).hasSize(3).doesNotHaveDuplicates();
         assertThat(teamNames).allMatch(name -> !name.isBlank());
+        assertThat(stageSettings).containsExactly(
+                "1:CHAT_WITH_PROBLEMS",
+                "2:CHAT_AND_KANBAN",
+                "3:CHAT_AND_KANBAN"
+        );
     }
 
     @Test
@@ -1670,13 +1687,23 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
-    void shouldRejectSessionStartWithoutSavedStages() throws Exception {
+    void shouldExposeThreeDefaultStagesForNewSession() throws Exception {
         String sessionCode = createSession("Тестовая смена", 2);
-        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
 
-        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
+        mockMvc.perform(get("/api/game-sessions/{sessionCode}/participants", sessionCode)
                         .with(auth()))
-                .andExpect(status().isConflict());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.stages.length()").value(3))
+                .andExpect(jsonPath("$.stages[0].stageNumber").value(1))
+                .andExpect(jsonPath("$.stages[0].interactionMode").value("CHAT_WITH_PROBLEMS"))
+                .andExpect(jsonPath("$.stages[0].problemCount").value(13))
+                .andExpect(jsonPath("$.stages[1].stageNumber").value(2))
+                .andExpect(jsonPath("$.stages[1].interactionMode").value("CHAT_AND_KANBAN"))
+                .andExpect(jsonPath("$.stages[1].problemCount").value(12))
+                .andExpect(jsonPath("$.stages[2].stageNumber").value(3))
+                .andExpect(jsonPath("$.stages[2].interactionMode").value("CHAT_AND_KANBAN"))
+                .andExpect(jsonPath("$.stages[2].problemCount").value(12))
+                .andExpect(jsonPath("$.sessionRuntime.activeStageNumber").value(1));
     }
 
     @Test
@@ -2045,6 +2072,7 @@ class PlayerSessionControllerIntegrationTest {
                         ))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionCode").value(matchesPattern("[A-Z]{4}-\\d{2}")))
+                .andExpect(jsonPath("$.stageCount").value(3))
                 .andReturn();
 
         JsonNode payload = objectMapper.readTree(result.getResponse().getContentAsString());
