@@ -43,6 +43,16 @@ public class TeamProblemState {
     @Column(name = "resolved_at")
     private LocalDateTime resolvedAt;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "escalation_type", length = 40)
+    private ProblemEscalationType escalationType;
+
+    @Column(name = "escalated_at")
+    private LocalDateTime escalatedAt;
+
+    @Column(name = "escalation_resolved_at")
+    private LocalDateTime escalationResolvedAt;
+
     protected TeamProblemState() {
     }
 
@@ -67,10 +77,34 @@ public class TeamProblemState {
         this.resolvedAt = status == SessionProblemStatus.RESOLVED
                 ? LocalDateTime.now()
                 : null;
+
+        if (status == SessionProblemStatus.RESOLVED) {
+            resolveEscalation();
+        }
     }
 
     public void assignStageNumber(Integer stageNumber) {
         this.stageNumber = stageNumber;
+    }
+
+    public void activateEscalation(ProblemEscalationType escalationType) {
+        if (escalationType == null || this.escalationType != null) {
+            return;
+        }
+
+        this.escalationType = escalationType;
+        this.escalatedAt = LocalDateTime.now();
+        this.escalationResolvedAt = null;
+    }
+
+    public void resolveEscalation() {
+        if (escalationType != null && escalationResolvedAt == null) {
+            escalationResolvedAt = LocalDateTime.now();
+        }
+    }
+
+    public boolean hasActiveEscalation() {
+        return escalationType != null && escalationResolvedAt == null;
     }
 
     @PrePersist
@@ -106,5 +140,17 @@ public class TeamProblemState {
 
     public LocalDateTime getResolvedAt() {
         return resolvedAt;
+    }
+
+    public ProblemEscalationType getEscalationType() {
+        return escalationType;
+    }
+
+    public LocalDateTime getEscalatedAt() {
+        return escalatedAt;
+    }
+
+    public LocalDateTime getEscalationResolvedAt() {
+        return escalationResolvedAt;
     }
 }

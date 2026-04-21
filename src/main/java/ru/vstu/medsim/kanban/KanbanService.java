@@ -6,6 +6,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import ru.vstu.medsim.economy.SessionEconomyService;
+import ru.vstu.medsim.economy.domain.FinalStageCrisisType;
+import ru.vstu.medsim.economy.domain.ProblemEscalationType;
 import ru.vstu.medsim.economy.domain.TeamResourceReservation;
 import ru.vstu.medsim.economy.domain.SessionProblemStatus;
 import ru.vstu.medsim.economy.domain.TeamProblemState;
@@ -132,10 +134,20 @@ public class KanbanService {
                 .filter(card -> isReleasedForStage(card, activeStageNumber))
                 .toList();
         Map<Long, List<TeamKanbanCardEvent>> eventsByCardId = loadEventsByCardId(cards);
+        FinalStageCrisisType crisisType = activeStageNumber != null && activeStageNumber >= 3
+                ? team.getGameSession().getFinalStageCrisisType()
+                : null;
+        int activeEscalationCount = (int) cards.stream()
+                .filter(card -> card.getProblemState().hasActiveEscalation())
+                .count();
 
         return new TeamKanbanBoardItem(
+                crisisType != null ? crisisType.name() : null,
+                crisisType != null ? crisisType.getTitle() : null,
+                crisisType != null ? crisisType.getDescription() : null,
+                crisisType != null ? activeEscalationCount : null,
                 cards.stream()
-                        .map(card -> toCardItem(card, eventsByCardId.getOrDefault(card.getId(), List.of())))
+                        .map(card -> toCardItem(card, eventsByCardId.getOrDefault(card.getId(), List.of()), crisisType))
                         .toList()
         );
     }
@@ -189,6 +201,34 @@ public class KanbanService {
                 .stream()
                 .filter(card -> isReleasedForStage(card, activeStageNumber))
                 .forEach(this::releaseHeldCardToStageBacklog);
+    }
+
+    @Transactional
+    public void recordStageCrisisEscalations(GameSession session, List<Long> activatedProblemStateIds) {
+        if (session == null || activatedProblemStateIds == null || activatedProblemStateIds.isEmpty()) {
+            return;
+        }
+
+        Set<Long> problemStateIds = Set.copyOf(activatedProblemStateIds);
+        List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId());
+
+        for (SessionTeam team : teams) {
+            SessionParticipant chiefDoctor = findTeamMemberByRole(team, CHIEF_DOCTOR_ROLE).orElse(null);
+
+            teamKanbanCardRepository.findAllCardsForTeam(team.getId())
+                    .stream()
+                    .filter(card -> problemStateIds.contains(card.getProblemState().getId()))
+                    .forEach(card -> recordEvent(
+                            card,
+                            null,
+                            chiefDoctor,
+                            KanbanCardEventType.STAGE_CRISIS_ESCALATED,
+                            card.getStatus(),
+                            card.getStatus(),
+                            card.getPriority(),
+                            card.getResponsibleDepartment()
+                    ));
+        }
     }
 
     @Transactional
@@ -436,6 +476,7 @@ public class KanbanService {
         KanbanCardStatus fromStatus = card.getStatus();
         KanbanResponsibleDepartment responsibleDepartment = card.getResponsibleDepartment();
         SessionParticipant assignee = card.getAssignee();
+        boolean hadActiveEscalation = card.getProblemState().hasActiveEscalation();
         TeamResourceReservation reservation = sessionEconomyService.requireActiveReservationForCommit(card);
         sessionEconomyService.validateReservedResourcesCanBeCommitted(card, reservation);
 
@@ -467,6 +508,19 @@ public class KanbanService {
                 null,
                 responsibleDepartment
         );
+
+        if (hadActiveEscalation) {
+            recordEvent(
+                    card,
+                    actor,
+                    null,
+                    KanbanCardEventType.STAGE_CRISIS_RESOLVED,
+                    card.getStatus(),
+                    card.getStatus(),
+                    card.getPriority(),
+                    responsibleDepartment
+            );
+        }
     }
 
     private void returnCardToStageBacklog(SessionParticipant actor, TeamKanbanCard card) {
@@ -586,12 +640,18 @@ public class KanbanService {
                 ));
     }
 
-    private TeamKanbanCardItem toCardItem(TeamKanbanCard card, List<TeamKanbanCardEvent> events) {
+    private TeamKanbanCardItem toCardItem(
+            TeamKanbanCard card,
+            List<TeamKanbanCardEvent> events,
+            FinalStageCrisisType crisisType
+    ) {
         SessionParticipant assignee = card.getAssignee();
         var problemTemplate = card.getProblemState().getProblemTemplate();
         List<KanbanSolutionOption> solutionOptions = kanbanSolutionOptionRepository
                 .findAllByProblemTemplateIdAndActiveTrueOrderBySortOrderAscIdAsc(problemTemplate.getId());
         Optional<TeamResourceReservation> reservation = sessionEconomyService.getCurrentReservation(card);
+        boolean escalated = card.getProblemState().hasActiveEscalation();
+        ProblemEscalationType escalationType = card.getProblemState().getEscalationType();
 
         return new TeamKanbanCardItem(
                 card.getId(),
@@ -618,6 +678,11 @@ public class KanbanService {
                 reservation.map(TeamResourceReservation::getItemName).orElse(null),
                 reservation.map(TeamResourceReservation::getItemQuantity).orElse(0),
                 card.getResourcesSpentAt() != null,
+                escalated,
+                escalated && escalationType != null ? escalationType.name() : null,
+                escalated && escalationType != null ? escalationType.getTitle() : null,
+                escalated && escalationType != null ? escalationType.getDescription() : null,
+                escalated && escalationType != null ? escalationType.getPenaltyHint(crisisType) : null,
                 card.getResponsibleDepartment() != null ? card.getResponsibleDepartment().name() : null,
                 card.getStatus().name(),
                 assignee != null ? assignee.getId() : null,
@@ -822,6 +887,10 @@ public class KanbanService {
             case TASK_HELD -> "%s отложил задачу на следующий этап".formatted(actorName);
             case HOLD_RELEASED -> "Задача вернулась из отложенных в задачи этапа";
             case RETURNED_TO_STAGE -> "%s вернул задачу в задачи этапа".formatted(actorName);
+            case STAGE_CRISIS_ESCALATED -> "Система отметила задачу как кризис 3 этапа: %s".formatted(
+                    toEscalationLabel(event.getCard())
+            );
+            case STAGE_CRISIS_RESOLVED -> "%s снял кризис 3 этапа, закрыв задачу".formatted(actorName);
         };
     }
 
@@ -834,6 +903,8 @@ public class KanbanService {
             case CHIEF_DOCTOR_APPROVED -> "Задача закрыта";
             case TASK_HELD -> "Задача отложена";
             case HOLD_RELEASED -> "Задача вернулась в этап";
+            case STAGE_CRISIS_ESCALATED -> "Критическая задача 3 этапа";
+            case STAGE_CRISIS_RESOLVED -> "Кризис снят";
             case PRIORITY_SET, WORK_STARTED, SOLUTION_SELECTED -> "Обновление задачи";
         };
     }
@@ -865,6 +936,12 @@ public class KanbanService {
             case CHIEF_DOCTOR_APPROVED -> "%s закрыл задачу: %s, %s".formatted(actorName, problemTitle, roomName);
             case TASK_HELD -> "%s отложил задачу на следующий этап: %s, %s".formatted(actorName, problemTitle, roomName);
             case HOLD_RELEASED -> "Задача вернулась из отложенных в задачи этапа: %s, %s".formatted(problemTitle, roomName);
+            case STAGE_CRISIS_ESCALATED -> "Система выделила задачу как критическую для 3 этапа: %s, %s. %s".formatted(
+                    problemTitle,
+                    roomName,
+                    toEscalationLabel(event.getCard())
+            );
+            case STAGE_CRISIS_RESOLVED -> "%s снял кризис 3 этапа: %s, %s".formatted(actorName, problemTitle, roomName);
             case PRIORITY_SET, WORK_STARTED, SOLUTION_SELECTED -> "%s: %s, %s".formatted(toHistoryMessage(event), problemTitle, roomName);
         };
     }
@@ -894,6 +971,11 @@ public class KanbanService {
             case NURSING -> "сестринское подразделение";
             case ENGINEERING -> "инженерное подразделение";
         };
+    }
+
+    private String toEscalationLabel(TeamKanbanCard card) {
+        ProblemEscalationType escalationType = card.getProblemState().getEscalationType();
+        return escalationType != null ? escalationType.getTitle() : "критическая задача";
     }
 
     private boolean isReleasedForStage(TeamKanbanCard card, Integer activeStageNumber) {

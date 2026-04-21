@@ -403,7 +403,7 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].roomName").value("Рентген"))
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].problems.length()").value(3))
                 .andExpect(jsonPath("$.teamEconomy.rooms[0].problems[0].stageNumber").value(1))
-                .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(37))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(13))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].stageNumber").value(1));
     }
 
@@ -417,7 +417,7 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.teams.length()").value(2))
                 .andExpect(jsonPath("$.teams[0].teamId").value(firstTeamId(sessionCode)))
-                .andExpect(jsonPath("$.teams[0].teamKanbanBoard.cards.length()").value(37));
+                .andExpect(jsonPath("$.teams[0].teamKanbanBoard.cards.length()").value(13));
     }
 
     @Test
@@ -430,7 +430,7 @@ class PlayerSessionControllerIntegrationTest {
         mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, chiefDoctorId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionRuntime.activeStageInteractionMode").value("CHAT_WITH_PROBLEMS"))
-                .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(19))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(13))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].stageNumber").value(1))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].priority").value(nullValue()))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].solutionOptions.length()").value(2))
@@ -1505,6 +1505,11 @@ class PlayerSessionControllerIntegrationTest {
                                 "stageNumber", 2,
                                 "durationMinutes", 20,
                                 "interactionMode", "CHAT_AND_KANBAN"
+                        ),
+                        Map.of(
+                                "stageNumber", 3,
+                                "durationMinutes", 10,
+                                "interactionMode", "CHAT_AND_KANBAN"
                         )
                 )
         );
@@ -1514,9 +1519,10 @@ class PlayerSessionControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.stages.length()").value(2))
-                .andExpect(jsonPath("$.stages[0].problemCount").value(19))
-                .andExpect(jsonPath("$.stages[1].problemCount").value(18));
+                .andExpect(jsonPath("$.stages.length()").value(3))
+                .andExpect(jsonPath("$.stages[0].problemCount").value(13))
+                .andExpect(jsonPath("$.stages[1].problemCount").value(12))
+                .andExpect(jsonPath("$.stages[2].problemCount").value(12));
     }
 
     @Test
@@ -1589,6 +1595,12 @@ class PlayerSessionControllerIntegrationTest {
                         ),
                         Map.of(
                                 "stageNumber", 2,
+                                "durationMinutes", 20,
+                                "interactionMode", "CHAT_AND_KANBAN",
+                                "problemCount", 5
+                        ),
+                        Map.of(
+                                "stageNumber", 3,
                                 "durationMinutes", 20,
                                 "interactionMode", "CHAT_AND_KANBAN",
                                 "problemCount", 5
@@ -1975,57 +1987,38 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     private void saveDefaultStages(String sessionCode) throws Exception {
-        var request = Map.of(
-                "stages", List.of(
-                        Map.of(
-                                "stageNumber", 1,
-                                "durationMinutes", 12,
-                                "interactionMode", "CHAT_WITH_PROBLEMS"
-                        )
-                )
-        );
-
-        mockMvc.perform(put("/api/game-sessions/{sessionCode}/stages", sessionCode)
-                        .with(auth())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk());
+        saveThreeStages(sessionCode, 12, 12, 12);
     }
 
     private void saveChatProblemStages(String sessionCode) throws Exception {
-        var request = Map.of(
-                "stages", List.of(
-                        Map.of(
-                                "stageNumber", 1,
-                                "durationMinutes", 12,
-                                "interactionMode", "CHAT_WITH_PROBLEMS"
-                        ),
-                        Map.of(
-                                "stageNumber", 2,
-                                "durationMinutes", 12,
-                                "interactionMode", "CHAT_AND_KANBAN"
-                        )
-                )
-        );
-
-        mockMvc.perform(put("/api/game-sessions/{sessionCode}/stages", sessionCode)
-                        .with(auth())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk());
+        saveThreeStages(sessionCode, 12, 12, 12);
     }
 
     private void saveKanbanStages(String sessionCode) throws Exception {
+        saveThreeStages(sessionCode, 12, 12, 12);
+    }
+
+    private void saveThreeStages(
+            String sessionCode,
+            int firstStageDurationMinutes,
+            int secondStageDurationMinutes,
+            int thirdStageDurationMinutes
+    ) throws Exception {
         var request = Map.of(
                 "stages", List.of(
                         Map.of(
                                 "stageNumber", 1,
-                                "durationMinutes", 12,
+                                "durationMinutes", firstStageDurationMinutes,
                                 "interactionMode", "CHAT_WITH_PROBLEMS"
                         ),
                         Map.of(
                                 "stageNumber", 2,
-                                "durationMinutes", 12,
+                                "durationMinutes", secondStageDurationMinutes,
+                                "interactionMode", "CHAT_AND_KANBAN"
+                        ),
+                        Map.of(
+                                "stageNumber", 3,
+                                "durationMinutes", thirdStageDurationMinutes,
                                 "interactionMode", "CHAT_AND_KANBAN"
                         )
                 )

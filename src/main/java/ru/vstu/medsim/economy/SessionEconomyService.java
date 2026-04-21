@@ -7,7 +7,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import ru.vstu.medsim.economy.domain.ClinicRoomProblemTemplate;
 import ru.vstu.medsim.economy.domain.ClinicRoomTemplate;
+import ru.vstu.medsim.economy.domain.FinalStageCrisisType;
 import ru.vstu.medsim.economy.domain.ProblemSeverity;
+import ru.vstu.medsim.economy.domain.ProblemEscalationType;
 import ru.vstu.medsim.economy.domain.ResourceReservationStatus;
 import ru.vstu.medsim.economy.domain.SessionEconomySettings;
 import ru.vstu.medsim.economy.domain.SessionProblemStatus;
@@ -49,10 +51,14 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -206,6 +212,76 @@ public class SessionEconomyService {
 
             teamProblemStateRepository.saveAll(problemStates);
         }
+    }
+
+    @Transactional
+    public List<Long> activateFinalStageCrisisIfNeeded(GameSession session) {
+        if (session == null
+                || session.getStatus() == GameSessionStatus.LOBBY
+                || session.getActiveStageNumber() == null
+                || session.getActiveStageNumber() < 3
+                || session.getFinalStageCrisisType() != null) {
+            return List.of();
+        }
+
+        List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId());
+        Map<Long, List<TeamProblemState>> backlogProblemsByTeamId = new LinkedHashMap<>();
+        List<TeamProblemState> allBacklogProblems = new ArrayList<>();
+
+        for (SessionTeam team : teams) {
+            List<TeamProblemState> backlogProblems = teamProblemStateRepository
+                    .findAllByTeamRoomStateTeamIdOrderByTeamRoomStateClinicRoomSortOrderAscProblemTemplateProblemNumberAscIdAsc(team.getId())
+                    .stream()
+                    .filter(this::isBacklogProblemForFinalStage)
+                    .toList();
+
+            backlogProblemsByTeamId.put(team.getId(), backlogProblems);
+            allBacklogProblems.addAll(backlogProblems);
+        }
+
+        FinalStageCrisisType crisisType = resolveFinalStageCrisisType(allBacklogProblems);
+        session.activateFinalStageCrisis(crisisType);
+
+        List<TeamProblemState> activatedProblems = new ArrayList<>();
+
+        for (List<TeamProblemState> backlogProblems : backlogProblemsByTeamId.values()) {
+            List<TeamProblemState> orderedProblems = backlogProblems.stream()
+                    .filter(problemState -> !problemState.hasActiveEscalation())
+                    .sorted(Comparator
+                            .comparingInt(this::buildEscalationScore)
+                            .reversed()
+                            .thenComparing(problemState -> problemState.getTeamRoomState().getClinicRoom().getSortOrder())
+                            .thenComparing(problemState -> problemState.getProblemTemplate().getProblemNumber())
+                            .thenComparing(TeamProblemState::getId))
+                    .toList();
+
+            Set<Long> affectedRoomStateIds = new HashSet<>();
+            int activatedCount = 0;
+
+            for (TeamProblemState problemState : orderedProblems) {
+                if (activatedCount >= 2) {
+                    break;
+                }
+
+                Long roomStateId = problemState.getTeamRoomState().getId();
+                if (affectedRoomStateIds.contains(roomStateId)) {
+                    continue;
+                }
+
+                problemState.activateEscalation(classifyEscalationType(problemState));
+                activatedProblems.add(problemState);
+                affectedRoomStateIds.add(roomStateId);
+                activatedCount++;
+            }
+        }
+
+        if (!activatedProblems.isEmpty()) {
+            teamProblemStateRepository.saveAll(activatedProblems);
+        }
+
+        return activatedProblems.stream()
+                .map(TeamProblemState::getId)
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -526,18 +602,44 @@ public class SessionEconomyService {
                         Collectors.toList()
                 ));
 
+        FinalStageCrisisType crisisType = stageNumber != null && stageNumber == 3
+                ? team.getGameSession().getFinalStageCrisisType()
+                : null;
+
         BigDecimal income = roomStates.stream()
                 .map(roomState -> roomState.getClinicRoom().getBaseIncome().multiply(
-                        resolveRoomStateCoefficient(problemStatesByRoomStateId.getOrDefault(roomState.getId(), List.of()), stageNumber)
+                        resolveRoomIncomeCoefficient(
+                                problemStatesByRoomStateId.getOrDefault(roomState.getId(), List.of()),
+                                stageNumber,
+                                crisisType
+                        )
                 ))
                 .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add)
                 .setScale(2, RoundingMode.HALF_UP);
 
-        BigDecimal penalties = problemStates.stream()
+        BigDecimal basePenalties = problemStates.stream()
                 .filter(problemState -> isReleasedByStage(problemState, stageNumber))
                 .filter(problemState -> problemState.getStatus() != SessionProblemStatus.RESOLVED)
                 .map(problemState -> problemState.getProblemTemplate().getIgnorePenalty())
                 .reduce(BigDecimal.ZERO.setScale(2), BigDecimal::add)
+                .setScale(2, RoundingMode.HALF_UP);
+
+        long reputationEscalationCount = countActiveEscalations(problemStates, stageNumber, ProblemEscalationType.REPUTATION_INCIDENT);
+        long inspectionEscalationCount = countActiveEscalations(problemStates, stageNumber, ProblemEscalationType.INSPECTION_RISK);
+
+        BigDecimal reputationPenalties = crisisType != null && reputationEscalationCount > 0
+                ? income.multiply(crisisType.getReputationPenaltyRate())
+                        .multiply(BigDecimal.valueOf(reputationEscalationCount))
+                        .setScale(2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO.setScale(2);
+        BigDecimal inspectionPenalties = crisisType != null && inspectionEscalationCount > 0
+                ? crisisType.getInspectionFineAmount()
+                        .multiply(BigDecimal.valueOf(inspectionEscalationCount))
+                        .setScale(2, RoundingMode.HALF_UP)
+                : BigDecimal.ZERO.setScale(2);
+        BigDecimal penalties = basePenalties
+                .add(reputationPenalties)
+                .add(inspectionPenalties)
                 .setScale(2, RoundingMode.HALF_UP);
 
         List<TeamProblemState> currentStageProblems = problemStates.stream()
@@ -560,8 +662,14 @@ public class SessionEconomyService {
                 0,
                 null,
                 0,
-                "Итог этапа %d: доход %.2f, штрафы %.2f, бонус %.2f."
-                        .formatted(stageNumber, income, penalties, bonus)
+                buildStageSettlementMessage(
+                        stageNumber,
+                        income,
+                        basePenalties,
+                        reputationPenalties,
+                        inspectionPenalties,
+                        bonus
+                )
         ));
     }
 
@@ -628,6 +736,7 @@ public class SessionEconomyService {
     }
 
     private TeamRoomEconomyItem toRoomItem(TeamRoomState roomState, List<TeamProblemState> problemStates) {
+        FinalStageCrisisType crisisType = roomState.getTeam().getGameSession().getFinalStageCrisisType();
         List<TeamProblemState> activeProblemStates = problemStates.stream()
                 .filter(problemState -> problemState.getStatus() != SessionProblemStatus.RESOLVED)
                 .toList();
@@ -654,6 +763,13 @@ public class SessionEconomyService {
                         problemState.getProblemTemplate().getRequiredItemQuantity(),
                         problemState.getProblemTemplate().getIgnorePenalty(),
                         problemState.getProblemTemplate().getSeverity().getPenaltyWeight(),
+                        problemState.hasActiveEscalation(),
+                        problemState.hasActiveEscalation() ? problemState.getEscalationType().name() : null,
+                        problemState.hasActiveEscalation() ? problemState.getEscalationType().getTitle() : null,
+                        problemState.hasActiveEscalation() ? problemState.getEscalationType().getDescription() : null,
+                        problemState.hasActiveEscalation()
+                                ? problemState.getEscalationType().getPenaltyHint(crisisType)
+                                : null,
                         problemState.getStatus().name()
                 ))
                 .toList();
@@ -680,9 +796,172 @@ public class SessionEconomyService {
                 .orElse(BigDecimal.ONE.setScale(2));
     }
 
+    private BigDecimal resolveRoomIncomeCoefficient(
+            List<TeamProblemState> problemStates,
+            Integer stageNumber,
+            FinalStageCrisisType crisisType
+    ) {
+        BigDecimal baseCoefficient = resolveRoomStateCoefficient(problemStates, stageNumber);
+
+        if (stageNumber == null || stageNumber != 3 || crisisType == null) {
+            return baseCoefficient;
+        }
+
+        boolean operationsEscalationActive = problemStates.stream()
+                .filter(problemState -> isReleasedByStage(problemState, stageNumber))
+                .filter(problemState -> problemState.getStatus() != SessionProblemStatus.RESOLVED)
+                .anyMatch(problemState -> problemState.hasActiveEscalation()
+                        && problemState.getEscalationType() == ProblemEscalationType.OPERATIONS_DISRUPTION);
+
+        if (!operationsEscalationActive) {
+            return baseCoefficient;
+        }
+
+        BigDecimal operationsFactor = crisisType.getOperationsIncomeFactor();
+        return baseCoefficient.compareTo(operationsFactor) < 0 ? baseCoefficient : operationsFactor;
+    }
+
     private boolean isReleasedByStage(TeamProblemState problemState, Integer stageNumber) {
         Integer problemStageNumber = problemState.getStageNumber();
         return stageNumber == null || problemStageNumber == null || problemStageNumber <= stageNumber;
+    }
+
+    private boolean isBacklogProblemForFinalStage(TeamProblemState problemState) {
+        return problemState.getStageNumber() != null
+                && problemState.getStageNumber() < 3
+                && problemState.getStatus() != SessionProblemStatus.RESOLVED;
+    }
+
+    private FinalStageCrisisType resolveFinalStageCrisisType(List<TeamProblemState> problemStates) {
+        if (problemStates.isEmpty()) {
+            return FinalStageCrisisType.PEAK_LOAD;
+        }
+
+        Map<FinalStageCrisisType, Integer> weights = new EnumMap<>(FinalStageCrisisType.class);
+        for (FinalStageCrisisType crisisType : FinalStageCrisisType.values()) {
+            weights.put(crisisType, 0);
+        }
+
+        for (TeamProblemState problemState : problemStates) {
+            ProblemEscalationType escalationType = classifyEscalationType(problemState);
+            FinalStageCrisisType crisisType = escalationType.toFinalStageCrisisType();
+            weights.computeIfPresent(crisisType, (key, currentWeight) -> currentWeight + buildEscalationScore(problemState));
+        }
+
+        FinalStageCrisisType dominantCrisisType = FinalStageCrisisType.REPUTATIONAL_PRESSURE;
+        int dominantWeight = -1;
+
+        for (FinalStageCrisisType crisisType : FinalStageCrisisType.values()) {
+            int currentWeight = weights.getOrDefault(crisisType, 0);
+            if (currentWeight > dominantWeight) {
+                dominantWeight = currentWeight;
+                dominantCrisisType = crisisType;
+            }
+        }
+
+        return dominantCrisisType;
+    }
+
+    private int buildEscalationScore(TeamProblemState problemState) {
+        int severityWeight = switch (problemState.getProblemTemplate().getSeverity()) {
+            case CRITICAL -> 300;
+            case SERIOUS -> 200;
+            case MINOR -> 100;
+        };
+
+        int stageBacklogWeight = problemState.getStageNumber() != null && problemState.getStageNumber() == 1 ? 40 : 0;
+        int ignorePenaltyWeight = problemState.getProblemTemplate().getIgnorePenalty()
+                .movePointRight(2)
+                .intValue();
+
+        return severityWeight + stageBacklogWeight + ignorePenaltyWeight;
+    }
+
+    private ProblemEscalationType classifyEscalationType(TeamProblemState problemState) {
+        String normalizedTitle = problemState.getProblemTemplate().getTitle().toLowerCase(Locale.ROOT);
+
+        if (containsAny(
+                normalizedTitle,
+                "мыш",
+                "крыса",
+                "мыло",
+                "туалетная бумага",
+                "антисептик",
+                "простын",
+                "ведр",
+                "хлам",
+                "личные вещи",
+                "санитар"
+        )) {
+            return ProblemEscalationType.REPUTATION_INCIDENT;
+        }
+
+        if (containsAny(
+                normalizedTitle,
+                "трещ",
+                "искр",
+                "развод",
+                "протека",
+                "кран",
+                "пожар",
+                "рециркулятор",
+                "проверк",
+                "рольстав",
+                "электронн",
+                "уф"
+        )) {
+            return ProblemEscalationType.INSPECTION_RISK;
+        }
+
+        return ProblemEscalationType.OPERATIONS_DISRUPTION;
+    }
+
+    private boolean containsAny(String source, String... fragments) {
+        for (String fragment : fragments) {
+            if (source.contains(fragment)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private long countActiveEscalations(
+            List<TeamProblemState> problemStates,
+            Integer stageNumber,
+            ProblemEscalationType escalationType
+    ) {
+        return problemStates.stream()
+                .filter(problemState -> isReleasedByStage(problemState, stageNumber))
+                .filter(problemState -> problemState.getStatus() != SessionProblemStatus.RESOLVED)
+                .filter(TeamProblemState::hasActiveEscalation)
+                .filter(problemState -> problemState.getEscalationType() == escalationType)
+                .count();
+    }
+
+    private String buildStageSettlementMessage(
+            Integer stageNumber,
+            BigDecimal income,
+            BigDecimal basePenalties,
+            BigDecimal reputationPenalties,
+            BigDecimal inspectionPenalties,
+            BigDecimal bonus
+    ) {
+        if ((reputationPenalties.compareTo(BigDecimal.ZERO) == 0 && inspectionPenalties.compareTo(BigDecimal.ZERO) == 0)
+                || stageNumber == null
+                || stageNumber != 3) {
+            return "Итог этапа %d: доход %.2f, штрафы %.2f, бонус %.2f."
+                    .formatted(stageNumber, income, basePenalties, bonus);
+        }
+
+        return "Итог этапа %d: доход %.2f, базовые штрафы %.2f, кризисные штрафы %.2f, бонус %.2f."
+                .formatted(
+                        stageNumber,
+                        income,
+                        basePenalties,
+                        reputationPenalties.add(inspectionPenalties).setScale(2, RoundingMode.HALF_UP),
+                        bonus
+                );
     }
 
     private void validateProblemDistribution(List<Integer> stageProblemCounts) {

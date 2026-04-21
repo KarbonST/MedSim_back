@@ -9,6 +9,7 @@ import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
+import ru.vstu.medsim.economy.domain.FinalStageCrisisType;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -52,6 +53,13 @@ public class GameSession {
 
     @Column(name = "timer_updated_at")
     private LocalDateTime timerUpdatedAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "final_stage_crisis_type", length = 40)
+    private FinalStageCrisisType finalStageCrisisType;
+
+    @Column(name = "final_stage_crisis_activated_at")
+    private LocalDateTime finalStageCrisisActivatedAt;
 
     protected GameSession() {
     }
@@ -185,6 +193,15 @@ public class GameSession {
         timerUpdatedAt = null;
     }
 
+    public void activateFinalStageCrisis(FinalStageCrisisType crisisType) {
+        if (crisisType == null || finalStageCrisisType != null) {
+            return;
+        }
+
+        finalStageCrisisType = crisisType;
+        finalStageCrisisActivatedAt = LocalDateTime.now();
+    }
+
     public int getRemainingSecondsAt(LocalDateTime moment) {
         if (timerRemainingSeconds == null) {
             return 0;
@@ -252,5 +269,13 @@ public class GameSession {
 
     public LocalDateTime getTimerUpdatedAt() {
         return timerUpdatedAt;
+    }
+
+    public FinalStageCrisisType getFinalStageCrisisType() {
+        return finalStageCrisisType;
+    }
+
+    public LocalDateTime getFinalStageCrisisActivatedAt() {
+        return finalStageCrisisActivatedAt;
     }
 }

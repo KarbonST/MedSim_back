@@ -290,7 +290,7 @@ class SessionEconomyIntegrationTest {
     void shouldResetTeamStageTimeUnitsWhenSelectingStage() throws Exception {
         String sessionCode = createSession("Экономическая сессия", 2, new BigDecimal("22.00"), 17);
 
-        saveTwoStages(sessionCode);
+        saveThreeStages(sessionCode);
 
         jdbcTemplate.update(
                 "UPDATE team_economy_states SET current_stage_time_units = 1 WHERE team_id IN (SELECT st.id FROM session_teams st JOIN game_sessions gs ON gs.id = st.game_session_id WHERE gs.code = ?)",
@@ -331,7 +331,7 @@ class SessionEconomyIntegrationTest {
         return objectMapper.readTree(response).path("sessionCode").asText();
     }
 
-    private void saveTwoStages(String sessionCode) throws Exception {
+    private void saveThreeStages(String sessionCode) throws Exception {
         mockMvc.perform(put("/api/game-sessions/{sessionCode}/stages", sessionCode)
                         .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic("facilitator", "medsim123"))
                         .contentType(MediaType.APPLICATION_JSON)
@@ -345,6 +345,11 @@ class SessionEconomyIntegrationTest {
                                         Map.of(
                                                 "stageNumber", 2,
                                                 "durationMinutes", 12,
+                                                "interactionMode", "CHAT_AND_KANBAN"
+                                        ),
+                                        Map.of(
+                                                "stageNumber", 3,
+                                                "durationMinutes", 14,
                                                 "interactionMode", "CHAT_AND_KANBAN"
                                         )
                                 )

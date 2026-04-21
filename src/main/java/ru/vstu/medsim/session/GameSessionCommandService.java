@@ -375,6 +375,7 @@ public class GameSessionCommandService {
         sessionEconomyService.resetStageTimeForSession(session.getId());
         if (stageChanged) {
             kanbanService.releaseHeldCardsForStage(session, stage.getStageNumber());
+            activateFinalStageCrisisIfNeeded(session, stage.getStageNumber());
         }
         return gameSessionQueryService.getParticipants(sessionCode);
     }
@@ -458,6 +459,8 @@ public class GameSessionCommandService {
             sessionEconomyService.resetStageTimeForSession(session.getId());
         }
 
+        activateFinalStageCrisisIfNeeded(session, session.getActiveStageNumber());
+
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 
@@ -481,6 +484,8 @@ public class GameSessionCommandService {
         SessionStageSetting activeStage = session.getActiveStageNumber() != null
                 ? getStageOrThrow(session, session.getActiveStageNumber())
                 : null;
+
+        activateFinalStageCrisisIfNeeded(session, session.getActiveStageNumber());
 
         if (activeStage != null && activeStage.getInteractionMode().hasProblemWorkflow()) {
             sessionEconomyService.settleStageForSession(session, activeStage.getStageNumber());
@@ -732,6 +737,13 @@ public class GameSessionCommandService {
     }
 
     private void validateStageSettings(List<GameSessionStageSettingsRequest.StageItem> stages) {
+        if (stages == null || stages.size() != DEFAULT_STAGE_COUNT) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "В этой версии игры всегда используется ровно 3 этапа."
+            );
+        }
+
         List<Integer> stageNumbers = stages.stream()
                 .map(GameSessionStageSettingsRequest.StageItem::stageNumber)
                 .sorted()
@@ -746,6 +758,15 @@ public class GameSessionCommandService {
                 );
             }
         }
+    }
+
+    private void activateFinalStageCrisisIfNeeded(GameSession session, Integer stageNumber) {
+        if (stageNumber == null || stageNumber != DEFAULT_STAGE_COUNT) {
+            return;
+        }
+
+        List<Long> activatedProblemStateIds = sessionEconomyService.activateFinalStageCrisisIfNeeded(session);
+        kanbanService.recordStageCrisisEscalations(session, activatedProblemStateIds);
     }
 
     private List<Integer> resolveProblemDistribution(List<GameSessionStageSettingsRequest.StageItem> orderedStages) {

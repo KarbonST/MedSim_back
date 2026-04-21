@@ -14,6 +14,11 @@ public record TeamProblemEconomyItem(
         Integer requiredItemQuantity,
         BigDecimal ignorePenalty,
         Integer penaltyWeight,
+        boolean escalated,
+        String escalationType,
+        String escalationTitle,
+        String escalationDescription,
+        String escalationPenaltyHint,
         String status
 ) {
 }
