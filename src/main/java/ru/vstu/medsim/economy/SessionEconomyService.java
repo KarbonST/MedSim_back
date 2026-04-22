@@ -1,5 +1,7 @@
 package ru.vstu.medsim.economy;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -64,6 +66,8 @@ import java.util.stream.Collectors;
 
 @Service
 public class SessionEconomyService {
+
+    private static final Logger log = LoggerFactory.getLogger(SessionEconomyService.class);
 
     public static final BigDecimal DEFAULT_STARTING_BUDGET = new BigDecimal("15.00");
     public static final int DEFAULT_STAGE_TIME_UNITS = 15;
@@ -278,6 +282,14 @@ public class SessionEconomyService {
         if (!activatedProblems.isEmpty()) {
             teamProblemStateRepository.saveAll(activatedProblems);
         }
+
+        log.info(
+                "Final stage crisis activated: sessionCode={}, crisisType={}, activatedEscalations={}, backlogProblemCount={}",
+                session.getCode(),
+                crisisType,
+                activatedProblems.size(),
+                allBacklogProblems.size()
+        );
 
         return activatedProblems.stream()
                 .map(TeamProblemState::getId)
@@ -671,6 +683,17 @@ public class SessionEconomyService {
                         bonus
                 )
         ));
+        log.info(
+                "Stage settled: sessionCode={}, teamId={}, teamName={}, stageNumber={}, income={}, penalties={}, bonus={}, netAmount={}",
+                team.getGameSession().getCode(),
+                team.getId(),
+                team.getName(),
+                stageNumber,
+                income,
+                penalties,
+                bonus,
+                income.add(bonus).subtract(penalties).setScale(2, RoundingMode.HALF_UP)
+        );
     }
 
     private TeamEconomyItem toTeamItem(

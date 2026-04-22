@@ -73,9 +73,33 @@ public class TeamChatWebSocketHandler extends TextWebSocketHandler {
             TeamChatMessageItem item = teamChatService.postPlayerMessage(connection.sessionCode(), connection.participantId(), messageText);
             broadcastMessage(item, connection.gameSessionId());
         } catch (JsonProcessingException exception) {
+            log.warn(
+                    "Team chat websocket payload parsing failed: sessionCode={}, participantId={}, sessionId={}",
+                    connection.sessionCode(),
+                    connection.participantId(),
+                    session.getId(),
+                    exception
+            );
             sendError(session, "Не удалось обработать сообщение чата.");
         } catch (ResponseStatusException exception) {
+            log.info(
+                    "Team chat websocket message rejected: sessionCode={}, participantId={}, sessionId={}, status={}, reason={}",
+                    connection.sessionCode(),
+                    connection.participantId(),
+                    session.getId(),
+                    exception.getStatusCode(),
+                    exception.getReason()
+            );
             sendError(session, exception.getReason() == null ? "Не удалось отправить сообщение." : exception.getReason());
+        } catch (Exception exception) {
+            log.error(
+                    "Unexpected team chat websocket processing error: sessionCode={}, participantId={}, sessionId={}",
+                    connection.sessionCode(),
+                    connection.participantId(),
+                    session.getId(),
+                    exception
+            );
+            sendError(session, "Произошла внутренняя ошибка чата. Попробуйте ещё раз.");
         }
     }
 
@@ -87,7 +111,7 @@ public class TeamChatWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void handleTransportError(WebSocketSession session, Throwable exception) throws Exception {
-        log.warn("Team chat websocket transport error: sessionId={}, message={}", session.getId(), exception.getMessage());
+        log.error("Team chat websocket transport error: sessionId={}", session.getId(), exception);
         removeSession(session);
         if (session.isOpen()) {
             session.close(CloseStatus.SERVER_ERROR);

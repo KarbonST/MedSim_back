@@ -13,6 +13,8 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import ru.vstu.medsim.common.web.RestAccessDeniedHandler;
+import ru.vstu.medsim.common.web.RestAuthenticationEntryPoint;
 
 import javax.sql.DataSource;
 import java.util.List;
@@ -21,7 +23,11 @@ import java.util.List;
 public class SecurityConfig {
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(
+            HttpSecurity http,
+            RestAuthenticationEntryPoint authenticationEntryPoint,
+            RestAccessDeniedHandler accessDeniedHandler
+    ) throws Exception {
         return http
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(Customizer.withDefaults())
@@ -30,7 +36,11 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/**", "/api/game-sessions/**").authenticated()
                         .anyRequest().permitAll()
                 )
-                .httpBasic(Customizer.withDefaults())
+                .exceptionHandling(exceptionHandling -> exceptionHandling
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                        .accessDeniedHandler(accessDeniedHandler)
+                )
+                .httpBasic(httpBasic -> httpBasic.authenticationEntryPoint(authenticationEntryPoint))
                 .build();
     }
 

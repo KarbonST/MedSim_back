@@ -1,5 +1,7 @@
 package ru.vstu.medsim.player;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,6 +36,8 @@ import java.util.List;
 
 @Service
 public class PlayerSessionService {
+
+    private static final Logger log = LoggerFactory.getLogger(PlayerSessionService.class);
 
     private final PlayerRepository playerRepository;
     private final GameSessionRepository gameSessionRepository;
@@ -112,6 +116,15 @@ public class PlayerSessionService {
         if (participant == null) {
             participant = sessionParticipantRepository.save(new SessionParticipant(session, player));
         }
+
+        log.info(
+                "Player joined session: sessionCode={}, participantId={}, playerId={}, displayName={}, returningParticipant={}",
+                session.getCode(),
+                participant.getId(),
+                player.getId(),
+                player.getDisplayName(),
+                returningParticipant
+        );
 
         return new PlayerSessionJoinResponse(
                 participant.getId(),

@@ -1,5 +1,7 @@
 package ru.vstu.medsim.session;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,6 +48,8 @@ import java.util.stream.Collectors;
 
 @Service
 public class GameSessionCommandService {
+
+    private static final Logger log = LoggerFactory.getLogger(GameSessionCommandService.class);
 
     private static final String SESSION_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ";
     private static final int SESSION_CODE_PREFIX_LENGTH = 4;
@@ -150,6 +154,15 @@ public class GameSessionCommandService {
         SessionStageSetting firstStage = defaultStageSettings.get(0);
         session.initializeStageRuntime(firstStage.getStageNumber(), firstStage.getDurationMinutes());
         gameSessionRepository.save(session);
+        log.info(
+                "Game session created: sessionCode={}, sessionName={}, teamCount={}, stageCount={}, startingBudget={}, stageTimeUnits={}",
+                sessionCode,
+                sessionName,
+                teams.size(),
+                defaultStageSettings.size(),
+                request.startingBudget(),
+                request.stageTimeUnits()
+        );
 
         return toSummary(session);
     }
@@ -271,6 +284,12 @@ public class GameSessionCommandService {
         session.initializeStageRuntime(firstStage.getStageNumber(), firstStage.getDurationMinutes());
         gameSessionRepository.save(session);
         sessionEconomyService.resetStageTimeForSession(session.getId());
+        log.info(
+                "Stage settings saved: sessionCode={}, stageNumbers={}, problemDistribution={}",
+                session.getCode(),
+                stageSettings.stream().map(SessionStageSetting::getStageNumber).toList(),
+                problemDistribution
+        );
 
         return gameSessionQueryService.getParticipants(sessionCode);
     }
@@ -376,6 +395,14 @@ public class GameSessionCommandService {
         if (stageChanged) {
             kanbanService.releaseHeldCardsForStage(session, stage.getStageNumber());
             activateFinalStageCrisisIfNeeded(session, stage.getStageNumber());
+            log.info(
+                    "Active stage changed: sessionCode={}, previousStage={}, newStage={}, interactionMode={}, durationMinutes={}",
+                    session.getCode(),
+                    previousStage != null ? previousStage.getStageNumber() : null,
+                    stage.getStageNumber(),
+                    stage.getInteractionMode(),
+                    stage.getDurationMinutes()
+            );
         }
         return gameSessionQueryService.getParticipants(sessionCode);
     }
@@ -391,6 +418,7 @@ public class GameSessionCommandService {
         }
 
         gameSessionRepository.save(session);
+        log.info("Runtime timer started: sessionCode={}, stageNumber={}", session.getCode(), session.getActiveStageNumber());
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 
@@ -405,6 +433,7 @@ public class GameSessionCommandService {
         }
 
         gameSessionRepository.save(session);
+        log.info("Runtime timer paused: sessionCode={}, stageNumber={}", session.getCode(), session.getActiveStageNumber());
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 
@@ -420,6 +449,7 @@ public class GameSessionCommandService {
         }
 
         gameSessionRepository.save(session);
+        log.info("Runtime timer reset: sessionCode={}, stageNumber={}", session.getCode(), stage.getStageNumber());
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 
@@ -460,6 +490,13 @@ public class GameSessionCommandService {
         }
 
         activateFinalStageCrisisIfNeeded(session, session.getActiveStageNumber());
+        log.info(
+                "Game session started: sessionCode={}, activeStageNumber={}, participantCount={}, teamCount={}",
+                session.getCode(),
+                session.getActiveStageNumber(),
+                participants.size(),
+                teams.size()
+        );
 
         return gameSessionQueryService.getParticipants(sessionCode);
     }
@@ -475,6 +512,7 @@ public class GameSessionCommandService {
         }
 
         gameSessionRepository.save(session);
+        log.info("Game session paused: sessionCode={}, activeStageNumber={}", session.getCode(), session.getActiveStageNumber());
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 
@@ -498,6 +536,7 @@ public class GameSessionCommandService {
         }
 
         gameSessionRepository.save(session);
+        log.info("Game session finished: sessionCode={}, activeStageNumber={}", session.getCode(), session.getActiveStageNumber());
         return gameSessionQueryService.getParticipants(sessionCode);
     }
 
@@ -517,6 +556,12 @@ public class GameSessionCommandService {
         gameSessionRepository.delete(session);
 
         if (playerIds.isEmpty()) {
+            log.info(
+                    "Game session deleted: sessionCode={}, sessionId={}, participantCount={}, deletedPlayerCount=0",
+                    session.getCode(),
+                    session.getId(),
+                    participants.size()
+            );
             return;
         }
 
@@ -528,6 +573,14 @@ public class GameSessionCommandService {
         if (!exclusivePlayers.isEmpty()) {
             playerRepository.deleteAll(exclusivePlayers);
         }
+
+        log.info(
+                "Game session deleted: sessionCode={}, sessionId={}, participantCount={}, deletedPlayerCount={}",
+                session.getCode(),
+                session.getId(),
+                participants.size(),
+                exclusivePlayers.size()
+        );
     }
 
     private GameSession getRuntimeEditableSessionOrThrow(String sessionCode) {
