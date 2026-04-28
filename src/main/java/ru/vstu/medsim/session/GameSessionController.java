@@ -1,6 +1,9 @@
 package ru.vstu.medsim.session;
 
 import jakarta.validation.Valid;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,6 +18,9 @@ import ru.vstu.medsim.economy.SessionEconomyService;
 import ru.vstu.medsim.economy.dto.GameSessionEconomyResponse;
 import ru.vstu.medsim.kanban.KanbanService;
 import ru.vstu.medsim.kanban.dto.GameSessionKanbanResponse;
+import ru.vstu.medsim.analytics.SessionAnalyticsExcelExportService;
+import ru.vstu.medsim.analytics.SessionAnalyticsService;
+import ru.vstu.medsim.analytics.dto.GameSessionAnalyticsResponse;
 import ru.vstu.medsim.session.dto.GameSessionCreateRequest;
 import ru.vstu.medsim.session.dto.GameSessionInventorySettingsRequest;
 import ru.vstu.medsim.session.dto.GameSessionParticipantItem;
@@ -38,17 +44,23 @@ public class GameSessionController {
     private final GameSessionCommandService gameSessionCommandService;
     private final SessionEconomyService sessionEconomyService;
     private final KanbanService kanbanService;
+    private final SessionAnalyticsService sessionAnalyticsService;
+    private final SessionAnalyticsExcelExportService sessionAnalyticsExcelExportService;
 
     public GameSessionController(
             GameSessionQueryService gameSessionQueryService,
             GameSessionCommandService gameSessionCommandService,
             SessionEconomyService sessionEconomyService,
-            KanbanService kanbanService
+            KanbanService kanbanService,
+            SessionAnalyticsService sessionAnalyticsService,
+            SessionAnalyticsExcelExportService sessionAnalyticsExcelExportService
     ) {
         this.gameSessionQueryService = gameSessionQueryService;
         this.gameSessionCommandService = gameSessionCommandService;
         this.sessionEconomyService = sessionEconomyService;
         this.kanbanService = kanbanService;
+        this.sessionAnalyticsService = sessionAnalyticsService;
+        this.sessionAnalyticsExcelExportService = sessionAnalyticsExcelExportService;
     }
 
     @GetMapping
@@ -74,6 +86,23 @@ public class GameSessionController {
     @GetMapping("/{sessionCode}/kanban")
     public GameSessionKanbanResponse getKanban(@PathVariable String sessionCode) {
         return kanbanService.getSessionBoards(sessionCode);
+    }
+
+    @GetMapping("/{sessionCode}/analytics")
+    public GameSessionAnalyticsResponse getAnalytics(@PathVariable String sessionCode) {
+        return sessionAnalyticsService.getSessionAnalytics(sessionCode);
+    }
+
+    @GetMapping("/{sessionCode}/analytics/export")
+    public ResponseEntity<ByteArrayResource> exportAnalytics(@PathVariable String sessionCode) {
+        byte[] payload = sessionAnalyticsExcelExportService.exportSessionAnalytics(sessionCode);
+        String filename = "medsim-analytics-%s.xlsx".formatted(gameSessionQueryService.normalizeCode(sessionCode).toLowerCase());
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"%s\"".formatted(filename))
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .contentLength(payload.length)
+                .body(new ByteArrayResource(payload));
     }
 
     @PutMapping("/{sessionCode}/economy/settings")

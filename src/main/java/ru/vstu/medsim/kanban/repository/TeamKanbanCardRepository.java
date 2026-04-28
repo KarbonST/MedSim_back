@@ -27,6 +27,21 @@ public interface TeamKanbanCardRepository extends JpaRepository<TeamKanbanCard, 
     List<TeamKanbanCard> findAllCardsForTeam(@Param("teamId") Long teamId);
 
     @Query("""
+            select card
+            from TeamKanbanCard card
+            join fetch card.team team
+            join fetch card.problemState problemState
+            join fetch problemState.teamRoomState roomState
+            join fetch roomState.clinicRoom room
+            join fetch problemState.problemTemplate problemTemplate
+            left join fetch card.assignee assignee
+            left join fetch assignee.player assigneePlayer
+            where team.gameSession.id = :gameSessionId
+            order by team.sortOrder asc, room.sortOrder asc, problemTemplate.problemNumber asc, card.id asc
+            """)
+    List<TeamKanbanCard> findAllByGameSessionId(@Param("gameSessionId") Long gameSessionId);
+
+    @Query("""
             select card.problemState.id
             from TeamKanbanCard card
             where card.team.id = :teamId

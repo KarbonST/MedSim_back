@@ -24,4 +24,9 @@ public interface TeamResourceReservationRepository extends JpaRepository<TeamRes
             Long teamId,
             ResourceReservationStatus status
     );
+
+    List<TeamResourceReservation> findAllByTeamGameSessionIdAndStatusOrderByTeamSortOrderAscCreatedAtAscIdAsc(
+            Long gameSessionId,
+            ResourceReservationStatus status
+    );
 }

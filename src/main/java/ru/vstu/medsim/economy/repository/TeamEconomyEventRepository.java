@@ -25,4 +25,16 @@ public interface TeamEconomyEventRepository extends JpaRepository<TeamEconomyEve
             order by event.createdAt desc, event.id desc
             """)
     List<TeamEconomyEvent> findRecentForTeam(@Param("teamId") Long teamId, Pageable pageable);
+
+    @Query("""
+            select event
+            from TeamEconomyEvent event
+            join fetch event.team team
+            left join fetch event.actor actor
+            left join fetch actor.player actorPlayer
+            left join fetch event.kanbanCard kanbanCard
+            where team.gameSession.id = :gameSessionId
+            order by team.sortOrder asc, event.createdAt asc, event.id asc
+            """)
+    List<TeamEconomyEvent> findAllByGameSessionId(@Param("gameSessionId") Long gameSessionId);
 }

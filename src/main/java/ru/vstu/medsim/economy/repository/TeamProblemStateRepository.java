@@ -10,4 +10,8 @@ public interface TeamProblemStateRepository extends JpaRepository<TeamProblemSta
     List<TeamProblemState> findAllByTeamRoomStateIdInOrderByTeamRoomStateClinicRoomSortOrderAscProblemTemplateProblemNumberAscIdAsc(List<Long> teamRoomStateIds);
 
     List<TeamProblemState> findAllByTeamRoomStateTeamIdOrderByTeamRoomStateClinicRoomSortOrderAscProblemTemplateProblemNumberAscIdAsc(Long teamId);
+
+    List<TeamProblemState> findAllByTeamRoomStateTeamGameSessionIdOrderByTeamRoomStateTeamSortOrderAscTeamRoomStateClinicRoomSortOrderAscProblemTemplateProblemNumberAscIdAsc(
+            Long gameSessionId
+    );
 }

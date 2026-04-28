@@ -26,6 +26,26 @@ public interface TeamKanbanCardEventRepository extends JpaRepository<TeamKanbanC
             select event
             from TeamKanbanCardEvent event
             join fetch event.card card
+            join fetch card.team team
+            join fetch card.problemState problemState
+            join fetch problemState.teamRoomState roomState
+            join fetch roomState.clinicRoom room
+            join fetch problemState.problemTemplate problemTemplate
+            left join fetch card.assignee assignee
+            left join fetch assignee.player assigneePlayer
+            left join fetch event.actor actor
+            left join fetch actor.player actorPlayer
+            left join fetch event.targetParticipant targetParticipant
+            left join fetch targetParticipant.player targetPlayer
+            where team.gameSession.id = :gameSessionId
+            order by team.sortOrder asc, card.id asc, event.createdAt asc, event.id asc
+            """)
+    List<TeamKanbanCardEvent> findAllByGameSessionId(@Param("gameSessionId") Long gameSessionId);
+
+    @Query("""
+            select event
+            from TeamKanbanCardEvent event
+            join fetch event.card card
             join fetch card.problemState problemState
             join fetch problemState.teamRoomState roomState
             join fetch roomState.clinicRoom room
