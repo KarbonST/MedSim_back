@@ -193,6 +193,15 @@ public class GameSession {
         timerUpdatedAt = null;
     }
 
+    public void restartToLobby(int stageNumber, int durationMinutes) {
+        status = GameSessionStatus.LOBBY;
+        startedAt = null;
+        finishedAt = null;
+        finalStageCrisisType = null;
+        finalStageCrisisActivatedAt = null;
+        initializeStageRuntime(stageNumber, durationMinutes);
+    }
+
     public void activateFinalStageCrisis(FinalStageCrisisType crisisType) {
         if (crisisType == null || finalStageCrisisType != null) {
             return;

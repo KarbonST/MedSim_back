@@ -128,6 +128,47 @@ public class SessionEconomyService {
             return List.of();
         }
 
+        teamEconomyStateRepository.saveAll(
+                teams.stream()
+                        .map(team -> new TeamEconomyState(team, resolvedStartingBudget, resolvedStageTimeUnits))
+                        .toList()
+        );
+
+        return createProblemStatesForTeams(teams);
+    }
+
+    @Transactional
+    public List<TeamProblemState> restartSessionProgress(
+            GameSession session,
+            List<SessionTeam> teams,
+            List<Integer> stageProblemCounts
+    ) {
+        SessionEconomySettings settings = sessionEconomySettingsRepository.findByGameSessionId(session.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Настройки экономики сессии не найдены."));
+
+        teamEconomyEventRepository.deleteAllByTeamGameSessionId(session.getId());
+        teamEconomyStateRepository.findAllByTeamGameSessionIdOrderByTeamSortOrderAscIdAsc(session.getId())
+                .forEach(teamEconomyState -> teamEconomyState.resetForLobby(
+                        settings.getStartingBudget(),
+                        settings.getStageTimeUnits()
+                ));
+
+        teams.forEach(team -> teamInventoryItemRepository.findAllByTeamIdOrderByItemNameAsc(team.getId())
+                .forEach(TeamInventoryItem::restoreInitialQuantity));
+
+        teamRoomStateRepository.deleteAllByTeamGameSessionId(session.getId());
+
+        if (teams.isEmpty()) {
+            return List.of();
+        }
+
+        List<TeamProblemState> problemStates = createProblemStatesForTeams(teams);
+        redistributeProblemsForSession(session.getId(), stageProblemCounts);
+        resetStageTimeForSession(session.getId());
+        return problemStates;
+    }
+
+    private List<TeamProblemState> createProblemStatesForTeams(List<SessionTeam> teams) {
         List<ClinicRoomTemplate> roomTemplates = clinicRoomTemplateRepository.findAllByOrderBySortOrderAscIdAsc();
         Map<Long, List<ClinicRoomProblemTemplate>> roomProblemTemplates = clinicRoomProblemTemplateRepository
                 .findAllByOrderByClinicRoomSortOrderAscProblemNumberAscIdAsc()
@@ -138,17 +179,11 @@ public class SessionEconomyService {
                         Collectors.toList()
                 ));
 
-        teamEconomyStateRepository.saveAll(
-                teams.stream()
-                        .map(team -> new TeamEconomyState(team, resolvedStartingBudget, resolvedStageTimeUnits))
-                        .toList()
-        );
-
         List<TeamRoomState> createdRoomStates = teamRoomStateRepository.saveAll(
                 teams.stream()
                         .flatMap(team -> roomTemplates.stream().map(roomTemplate -> new TeamRoomState(team, roomTemplate)))
                         .toList()
-        );
+                );
 
         List<TeamProblemState> createdProblemStates = new ArrayList<>();
         for (TeamRoomState roomState : createdRoomStates) {

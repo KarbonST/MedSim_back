@@ -429,7 +429,7 @@ class PlayerSessionControllerIntegrationTest {
         Long chiefDoctorId = participantIdByName(sessionCode, "Анна Петрова");
         Long cardId = firstKanbanCardId(sessionCode, firstTeamId(sessionCode));
 
-        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, chiefDoctorId))
+        MvcResult workspaceResult = mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, chiefDoctorId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionRuntime.activeStageInteractionMode").value("CHAT_WITH_PROBLEMS"))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards.length()").value(13))
@@ -437,8 +437,12 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].priority").value(nullValue()))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].solutionOptions.length()").value(2))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].solutionOptions[0].title").value("Устранение силами поликлиники"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].solutionOptions[0].description").value(nullValue()))
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].solutionOptions[0].budgetCost").value(1.0))
-                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].solutionOptions[1].title").value("Вызов соответствующей службы/мастера"));
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].solutionOptions[1].title").value("Вызов соответствующей службы/мастера"))
+                .andReturn();
+
+        assertSolutionProbabilityHintsHidden(objectMapper.readTree(workspaceResult.getResponse().getContentAsString()));
 
         mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -629,6 +633,12 @@ class PlayerSessionControllerIntegrationTest {
             mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, engineeringExecutorId))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.kanbanNotifications[0].type").value("SOLUTION_FAILED"));
+
+            mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, chiefDoctorId))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.kanbanNotifications[0].type").value("SOLUTION_FAILED"))
+                    .andExpect(jsonPath("$.kanbanNotifications[0].title").value("Решение не сработало"))
+                    .andExpect(jsonPath("$.kanbanNotifications[0].message").value(containsString("вероятностной проверке")));
         } finally {
             jdbcTemplate.update(
                     "UPDATE kanban_solution_options SET base_success_probability = 1.00 WHERE id = ?",
@@ -1064,6 +1074,180 @@ class PlayerSessionControllerIntegrationTest {
                 .asInt();
 
         assertThat(pausedRemainingSeconds).isBetween(1, runningRemainingSeconds);
+    }
+
+    @Test
+    void shouldRestartFinishedSessionWithoutLosingParticipants() throws Exception {
+        String sessionCode = createSession("Перезапуск сессии", 2);
+        prepareStartedTwoTeamSession(sessionCode);
+
+        Long annaId = participantIdByName(sessionCode, "Анна Петрова");
+        String roleBeforeRestart = jdbcTemplate.queryForObject(
+                """
+                SELECT sp.game_role
+                FROM session_participants sp
+                JOIN game_sessions gs ON gs.id = sp.game_session_id
+                WHERE gs.code = ?
+                  AND sp.id = ?
+                """,
+                String.class,
+                sessionCode,
+                annaId
+        );
+        Long teamBeforeRestart = jdbcTemplate.queryForObject(
+                """
+                SELECT sp.team_id
+                FROM session_participants sp
+                JOIN game_sessions gs ON gs.id = sp.game_session_id
+                WHERE gs.code = ?
+                  AND sp.id = ?
+                """,
+                Long.class,
+                sessionCode,
+                annaId
+        );
+        String restorableItemName = jdbcTemplate.queryForObject(
+                """
+                SELECT ti.item_name
+                FROM team_inventory_items ti
+                JOIN session_teams st ON st.id = ti.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.sort_order = 1
+                  AND ti.quantity > 0
+                ORDER BY ti.item_name
+                LIMIT 1
+                """,
+                String.class,
+                sessionCode
+        );
+        Integer inventoryQuantityBeforeRestart = jdbcTemplate.queryForObject(
+                """
+                SELECT ti.quantity
+                FROM team_inventory_items ti
+                JOIN session_teams st ON st.id = ti.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.sort_order = 1
+                  AND ti.item_name = ?
+                """,
+                Integer.class,
+                sessionCode,
+                restorableItemName
+        );
+
+        jdbcTemplate.update(
+                """
+                UPDATE team_inventory_items
+                SET quantity = 0
+                WHERE team_id = (
+                    SELECT st.id
+                    FROM session_teams st
+                    JOIN game_sessions gs ON gs.id = st.game_session_id
+                    WHERE gs.code = ?
+                      AND st.sort_order = 1
+                )
+                  AND item_name = ?
+                """,
+                sessionCode,
+                restorableItemName
+        );
+
+        selectCurrentStage(sessionCode, 3);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/finish", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/restart", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("LOBBY"))
+                .andExpect(jsonPath("$.sessionRuntime.activeStageNumber").value(1))
+                .andExpect(jsonPath("$.sessionRuntime.timerStatus").value("STOPPED"));
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM game_sessions WHERE code = ?",
+                String.class,
+                sessionCode
+        )).isEqualTo("LOBBY");
+        assertThat(jdbcTemplate.queryForObject(
+                """
+                SELECT sp.game_role
+                FROM session_participants sp
+                JOIN game_sessions gs ON gs.id = sp.game_session_id
+                WHERE gs.code = ?
+                  AND sp.id = ?
+                """,
+                String.class,
+                sessionCode,
+                annaId
+        )).isEqualTo(roleBeforeRestart);
+        assertThat(jdbcTemplate.queryForObject(
+                """
+                SELECT sp.team_id
+                FROM session_participants sp
+                JOIN game_sessions gs ON gs.id = sp.game_session_id
+                WHERE gs.code = ?
+                  AND sp.id = ?
+                """,
+                Long.class,
+                sessionCode,
+                annaId
+        )).isEqualTo(teamBeforeRestart);
+        assertThat(jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM team_economy_events event
+                JOIN session_teams st ON st.id = event.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                """,
+                Integer.class,
+                sessionCode
+        )).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM team_problem_states problem
+                JOIN team_room_states room_state ON room_state.id = problem.team_room_state_id
+                JOIN session_teams st ON st.id = room_state.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                """,
+                Integer.class,
+                sessionCode
+        )).isEqualTo(74);
+        assertThat(jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM team_kanban_cards card
+                JOIN session_teams st ON st.id = card.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                """,
+                Integer.class,
+                sessionCode
+        )).isEqualTo(74);
+        assertThat(jdbcTemplate.queryForObject(
+                """
+                SELECT ti.quantity
+                FROM team_inventory_items ti
+                JOIN session_teams st ON st.id = ti.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.sort_order = 1
+                  AND ti.item_name = ?
+                """,
+                Integer.class,
+                sessionCode,
+                restorableItemName
+        )).isEqualTo(inventoryQuantityBeforeRestart);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/start", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("IN_PROGRESS"));
     }
 
 
@@ -1825,6 +2009,43 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
+    void shouldBuildPostgameAnalyticsAfterEarlyFinishOnSecondStage() throws Exception {
+        String sessionCode = createSession("Досрочное завершение", 2);
+        prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
+        selectCurrentStage(sessionCode, 2);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/finish", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("FINISHED"));
+
+        mockMvc.perform(get("/api/game-sessions/{sessionCode}/analytics", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionCode").value(sessionCode))
+                .andExpect(jsonPath("$.stages.length()").value(3))
+                .andExpect(jsonPath("$.teams.length()").value(2));
+    }
+
+    @Test
+    void shouldBuildPostgameAnalyticsAfterFinishOnFirstStage() throws Exception {
+        String sessionCode = createSession("Завершение после первого этапа", 2);
+        prepareStartedTwoTeamSession(sessionCode);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/finish", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("FINISHED"));
+
+        mockMvc.perform(get("/api/game-sessions/{sessionCode}/analytics", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionCode").value(sessionCode))
+                .andExpect(jsonPath("$.stages.length()").value(3))
+                .andExpect(jsonPath("$.teams.length()").value(2));
+    }
+
+    @Test
     void shouldReturnOnlyOwnTeamChatForPlayer() throws Exception {
         String sessionCode = createSession("Чатовая смена", 2);
         prepareStartedTwoTeamSession(sessionCode);
@@ -2264,6 +2485,16 @@ class PlayerSessionControllerIntegrationTest {
         }
 
         throw new AssertionError("Не найден вариант решения '%s' для карточки %d.".formatted(title, cardId));
+    }
+
+    private void assertSolutionProbabilityHintsHidden(JsonNode workspace) {
+        for (JsonNode card : workspace.path("teamKanbanBoard").path("cards")) {
+            for (JsonNode option : card.path("solutionOptions")) {
+                String description = option.path("description").asText("");
+                assertThat(description).doesNotContain("Вероятность по методике");
+                assertThat(description).doesNotContain("Коэффициенты ролей");
+            }
+        }
     }
 
     private String latestReservationStatus(Long cardId) {

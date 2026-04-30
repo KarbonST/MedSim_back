@@ -2,6 +2,7 @@ package ru.vstu.medsim.economy.repository;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import ru.vstu.medsim.economy.domain.TeamEconomyEvent;
@@ -10,6 +11,13 @@ import ru.vstu.medsim.economy.domain.TeamEconomyEventType;
 import java.util.List;
 
 public interface TeamEconomyEventRepository extends JpaRepository<TeamEconomyEvent, Long> {
+
+    @Modifying
+    @Query("""
+            delete from TeamEconomyEvent event
+            where event.team.gameSession.id = :gameSessionId
+            """)
+    void deleteAllByTeamGameSessionId(@Param("gameSessionId") Long gameSessionId);
 
     boolean existsByTeamIdAndStageNumberAndEventType(Long teamId, Integer stageNumber, TeamEconomyEventType eventType);
 

@@ -30,6 +30,9 @@ public class TeamInventoryItem {
     @Column(name = "quantity", nullable = false)
     private Integer quantity;
 
+    @Column(name = "initial_quantity", nullable = false)
+    private Integer initialQuantity;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -40,16 +43,24 @@ public class TeamInventoryItem {
         this.team = team;
         this.itemName = itemName;
         this.quantity = quantity;
+        this.initialQuantity = quantity;
     }
 
     public void consume(int quantity) {
         this.quantity = this.quantity - quantity;
     }
 
+    public void restoreInitialQuantity() {
+        this.quantity = this.initialQuantity;
+    }
+
     @PrePersist
     void prePersist() {
         if (createdAt == null) {
             createdAt = LocalDateTime.now();
+        }
+        if (initialQuantity == null) {
+            initialQuantity = quantity;
         }
     }
 
@@ -67,6 +78,10 @@ public class TeamInventoryItem {
 
     public Integer getQuantity() {
         return quantity;
+    }
+
+    public Integer getInitialQuantity() {
+        return initialQuantity;
     }
 
     public LocalDateTime getCreatedAt() {

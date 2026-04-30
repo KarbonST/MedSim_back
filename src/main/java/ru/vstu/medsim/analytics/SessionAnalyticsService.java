@@ -348,7 +348,14 @@ public class SessionAnalyticsService {
 
         long fullCycleSeconds = 0L;
         int fullCycleSegments = 0;
-        for (Long metric : List.of(distributionValue, reactionValue, workValue, departmentReviewValue, chiefReviewValue)) {
+        Long[] cycleMetrics = {
+                distributionValue,
+                reactionValue,
+                workValue,
+                departmentReviewValue,
+                chiefReviewValue
+        };
+        for (Long metric : cycleMetrics) {
             if (metric != null) {
                 fullCycleSeconds += metric;
                 fullCycleSegments += 1;

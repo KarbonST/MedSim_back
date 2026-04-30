@@ -217,6 +217,11 @@ public class GameSessionController {
         return gameSessionCommandService.finishSession(sessionCode);
     }
 
+    @PatchMapping("/{sessionCode}/restart")
+    public GameSessionParticipantsResponse restartSession(@PathVariable String sessionCode) {
+        return gameSessionCommandService.restartSession(sessionCode);
+    }
+
     @DeleteMapping("/{sessionCode}")
     public ResponseEntity<Void> deleteSession(@PathVariable String sessionCode) {
         gameSessionCommandService.deleteSession(sessionCode);

@@ -6,8 +6,10 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import ru.vstu.medsim.chat.repository.TeamChatMessageRepository;
 import ru.vstu.medsim.economy.SessionEconomyService;
 import ru.vstu.medsim.economy.domain.TeamProblemState;
+import ru.vstu.medsim.economy.repository.TeamProblemStateRepository;
 import ru.vstu.medsim.kanban.KanbanService;
 import ru.vstu.medsim.player.domain.GameSession;
 import ru.vstu.medsim.player.domain.GameSessionStatus;
@@ -97,6 +99,8 @@ public class GameSessionCommandService {
     private final TeamInventoryCatalog teamInventoryCatalog;
     private final SessionEconomyService sessionEconomyService;
     private final KanbanService kanbanService;
+    private final TeamProblemStateRepository teamProblemStateRepository;
+    private final TeamChatMessageRepository teamChatMessageRepository;
 
     public GameSessionCommandService(
             GameSessionQueryService gameSessionQueryService,
@@ -108,7 +112,9 @@ public class GameSessionCommandService {
             TeamInventoryItemRepository teamInventoryItemRepository,
             TeamInventoryCatalog teamInventoryCatalog,
             SessionEconomyService sessionEconomyService,
-            KanbanService kanbanService
+            KanbanService kanbanService,
+            TeamProblemStateRepository teamProblemStateRepository,
+            TeamChatMessageRepository teamChatMessageRepository
     ) {
         this.gameSessionQueryService = gameSessionQueryService;
         this.gameSessionRepository = gameSessionRepository;
@@ -120,6 +126,8 @@ public class GameSessionCommandService {
         this.teamInventoryCatalog = teamInventoryCatalog;
         this.sessionEconomyService = sessionEconomyService;
         this.kanbanService = kanbanService;
+        this.teamProblemStateRepository = teamProblemStateRepository;
+        this.teamChatMessageRepository = teamChatMessageRepository;
     }
 
     @Transactional
@@ -541,6 +549,39 @@ public class GameSessionCommandService {
     }
 
     @Transactional
+    public GameSessionParticipantsResponse restartSession(String sessionCode) {
+        GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+
+        if (session.getStatus() == GameSessionStatus.LOBBY) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Сессия уже находится в стартовом состоянии.");
+        }
+
+        List<SessionStageSetting> stages = sessionStageSettingRepository.findAllByGameSessionIdOrderByStageNumberAsc(session.getId());
+        if (stages.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Для перезапуска сначала сохраните этапы сессии.");
+        }
+
+        List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId());
+        List<Integer> problemDistribution = resolveCurrentProblemDistribution(session, stages);
+        List<TeamProblemState> problemStates = sessionEconomyService.restartSessionProgress(session, teams, problemDistribution);
+        kanbanService.initializeCardsForProblemStates(problemStates);
+        teamChatMessageRepository.deleteAllByGameSessionId(session.getId());
+
+        SessionStageSetting firstStage = stages.get(0);
+        session.restartToLobby(firstStage.getStageNumber(), firstStage.getDurationMinutes());
+        gameSessionRepository.save(session);
+
+        log.info(
+                "Game session restarted: sessionCode={}, teamCount={}, preservedParticipantCount={}, problemDistribution={}",
+                session.getCode(),
+                teams.size(),
+                sessionParticipantRepository.countByGameSessionId(session.getId()),
+                problemDistribution
+        );
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
     public void deleteSession(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
         List<SessionParticipant> participants = sessionParticipantRepository
@@ -842,6 +883,30 @@ public class GameSessionCommandService {
 
         return orderedStages.stream()
                 .map(GameSessionStageSettingsRequest.StageItem::problemCount)
+                .toList();
+    }
+
+    private List<Integer> resolveCurrentProblemDistribution(
+            GameSession session,
+            List<SessionStageSetting> stages
+    ) {
+        List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(session.getId());
+        if (teams.isEmpty()) {
+            return sessionEconomyService.buildEvenProblemDistribution(stages.size());
+        }
+
+        Map<Integer, Long> countsByStage = teamProblemStateRepository
+                .findAllByTeamRoomStateTeamIdOrderByTeamRoomStateClinicRoomSortOrderAscProblemTemplateProblemNumberAscIdAsc(
+                        teams.get(0).getId()
+                )
+                .stream()
+                .collect(Collectors.groupingBy(
+                        TeamProblemState::getStageNumber,
+                        Collectors.counting()
+                ));
+
+        return stages.stream()
+                .map(stage -> Math.toIntExact(countsByStage.getOrDefault(stage.getStageNumber(), 0L)))
                 .toList();
     }
 

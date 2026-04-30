@@ -41,6 +41,8 @@ import ru.vstu.medsim.session.repository.SessionStageSettingRepository;
 import ru.vstu.medsim.session.repository.SessionTeamRepository;
 
 import java.math.BigDecimal;
+import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -163,9 +165,26 @@ public class KanbanService {
             return List.of();
         }
 
-        return teamKanbanCardEventRepository
+        Map<Long, TeamKanbanCardEvent> visibleEvents = new LinkedHashMap<>();
+
+        teamKanbanCardEventRepository
                 .findRecentTargetedEvents(participant.getId(), PageRequest.of(0, 8))
-                .stream()
+                .forEach(event -> visibleEvents.put(event.getId(), event));
+
+        teamKanbanCardEventRepository
+                .findRecentActorEventsByTypes(
+                        participant.getId(),
+                        EnumSet.of(KanbanCardEventType.SOLUTION_FAILED),
+                        PageRequest.of(0, 8)
+                )
+                .forEach(event -> visibleEvents.put(event.getId(), event));
+
+        return visibleEvents.values().stream()
+                .sorted(Comparator
+                        .comparing(TeamKanbanCardEvent::getCreatedAt)
+                        .thenComparing(TeamKanbanCardEvent::getId)
+                        .reversed())
+                .limit(8)
                 .map(this::toNotificationItem)
                 .toList();
     }
@@ -699,7 +718,7 @@ public class KanbanService {
         return new KanbanSolutionOptionItem(
                 option.getId(),
                 option.getTitle(),
-                option.getDescription(),
+                sanitizeSolutionDescription(option.getDescription()),
                 option.getBudgetCost(),
                 option.getTimeCost(),
                 option.getRequiredItemName(),
@@ -707,6 +726,20 @@ public class KanbanService {
                 unavailableReason.isEmpty(),
                 unavailableReason.orElse(null)
         );
+    }
+
+    private String sanitizeSolutionDescription(String description) {
+        if (description == null || description.isBlank()) {
+            return null;
+        }
+
+        String sanitized = description
+                .replaceAll("(?iu)Вероятность по методике:.*?(?=Коэффициенты ролей:|$)", "")
+                .replaceAll("(?iu)Коэффициенты ролей:.*$", "")
+                .replaceAll("\\s{2,}", " ")
+                .trim();
+
+        return sanitized.isBlank() ? null : sanitized;
     }
 
     private void recordEvent(
@@ -899,7 +932,8 @@ public class KanbanService {
             case DEPARTMENT_ASSIGNED -> "Нужно назначить исполнителя";
             case EXECUTOR_ASSIGNED -> "Вам назначена задача";
             case SENT_TO_DEPARTMENT_REVIEW, DEPARTMENT_APPROVED -> "Задача ожидает согласования";
-            case SOLUTION_FAILED, RETURNED_TO_STAGE -> "Задача возвращена";
+            case SOLUTION_FAILED -> "Решение не сработало";
+            case RETURNED_TO_STAGE -> "Задача возвращена";
             case CHIEF_DOCTOR_APPROVED -> "Задача закрыта";
             case TASK_HELD -> "Задача отложена";
             case HOLD_RELEASED -> "Задача вернулась в этап";
@@ -931,7 +965,11 @@ public class KanbanService {
                     problemTitle,
                     roomName
             );
-            case SOLUTION_FAILED -> "%s проверил результат и вернул задачу в задачи этапа: %s, %s".formatted(actorName, problemTitle, roomName);
+            case SOLUTION_FAILED -> "%s завершил финальную проверку: решение не сработало по вероятностной проверке, задача вернулась в задачи этапа: %s, %s".formatted(
+                    actorName,
+                    problemTitle,
+                    roomName
+            );
             case RETURNED_TO_STAGE -> "%s вернул задачу в задачи этапа: %s, %s".formatted(actorName, problemTitle, roomName);
             case CHIEF_DOCTOR_APPROVED -> "%s закрыл задачу: %s, %s".formatted(actorName, problemTitle, roomName);
             case TASK_HELD -> "%s отложил задачу на следующий этап: %s, %s".formatted(actorName, problemTitle, roomName);

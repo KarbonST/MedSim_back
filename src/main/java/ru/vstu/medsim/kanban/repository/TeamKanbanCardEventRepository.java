@@ -4,8 +4,10 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import ru.vstu.medsim.kanban.domain.KanbanCardEventType;
 import ru.vstu.medsim.kanban.domain.TeamKanbanCardEvent;
 
+import java.util.Collection;
 import java.util.List;
 
 public interface TeamKanbanCardEventRepository extends JpaRepository<TeamKanbanCardEvent, Long> {
@@ -59,6 +61,28 @@ public interface TeamKanbanCardEventRepository extends JpaRepository<TeamKanbanC
             """)
     List<TeamKanbanCardEvent> findRecentTargetedEvents(
             @Param("participantId") Long participantId,
+            Pageable pageable
+    );
+
+    @Query("""
+            select event
+            from TeamKanbanCardEvent event
+            join fetch event.card card
+            join fetch card.problemState problemState
+            join fetch problemState.teamRoomState roomState
+            join fetch roomState.clinicRoom room
+            join fetch problemState.problemTemplate problemTemplate
+            left join fetch event.actor actor
+            left join fetch actor.player actorPlayer
+            left join fetch event.targetParticipant targetParticipant
+            left join fetch targetParticipant.player targetPlayer
+            where actor.id = :participantId
+              and event.eventType in :eventTypes
+            order by event.createdAt desc, event.id desc
+            """)
+    List<TeamKanbanCardEvent> findRecentActorEventsByTypes(
+            @Param("participantId") Long participantId,
+            @Param("eventTypes") Collection<KanbanCardEventType> eventTypes,
             Pageable pageable
     );
 }
