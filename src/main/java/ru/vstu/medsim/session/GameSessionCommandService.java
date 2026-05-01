@@ -60,35 +60,6 @@ public class GameSessionCommandService {
     private static final int DEFAULT_STAGE_COUNT = 3;
     private static final int DEFAULT_STAGE_DURATION_MINUTES = 15;
 
-    private static final List<String> TEAM_NAME_ADJECTIVES = List.of(
-            "Бодрые",
-            "Лихие",
-            "Срочные",
-            "Ночные",
-            "Шустрые",
-            "Отважные",
-            "Невозмутимые",
-            "Улыбчивые",
-            "Боевые",
-            "Дежурные",
-            "Летучие",
-            "Хитрые"
-    );
-    private static final List<String> TEAM_NAME_NOUNS = List.of(
-            "Капельницы",
-            "Бинты",
-            "Термометры",
-            "Шприцы",
-            "Таблетки",
-            "Каталки",
-            "Пипетки",
-            "Ампулы",
-            "Компрессы",
-            "Градусники",
-            "Халаты",
-            "Пластыри"
-    );
-
     private final GameSessionQueryService gameSessionQueryService;
     private final GameSessionRepository gameSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
@@ -140,7 +111,7 @@ public class GameSessionCommandService {
         );
 
         List<SessionTeam> teams = sessionTeamRepository.saveAll(
-                generateFunnyTeamNames(request.teamCount()).stream()
+                generateDefaultTeamNames(request.teamCount()).stream()
                         .map(name -> new SessionTeam(session, name.name(), name.sortOrder()))
                         .toList()
         );
@@ -684,15 +655,27 @@ public class GameSessionCommandService {
                                 .formatted(team.getName(), String.join(", ", missingLeadershipRoles))
                 );
             }
+
+            boolean hasExecutor = teamRoles.stream()
+                    .anyMatch(role -> GameRoleCatalog.EXECUTOR_ROLES.stream().anyMatch(role::equalsIgnoreCase));
+
+            if (!hasExecutor) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Перед стартом игры в команде '%s' должна быть назначена хотя бы одна исполнительская роль."
+                                .formatted(team.getName())
+                );
+            }
         }
     }
 
 
     private void validateTeamHasRequiredLeadershipCapacity(SessionTeam team, List<SessionParticipant> teamParticipants) {
-        if (teamParticipants.size() < GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.size()) {
+        if (teamParticipants.size() < GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.size() + 1) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "В команде '%s' недостаточно участников для обязательных руководящих ролей.".formatted(team.getName())
+                    "В команде '%s' недостаточно участников: нужны все руководящие роли и хотя бы один исполнитель."
+                            .formatted(team.getName())
             );
         }
     }
@@ -1034,23 +1017,11 @@ public class GameSessionCommandService {
         );
     }
 
-    private List<TeamNameDraft> generateFunnyTeamNames(int teamCount) {
+    private List<TeamNameDraft> generateDefaultTeamNames(int teamCount) {
         List<TeamNameDraft> generatedNames = new ArrayList<>();
-        List<String> combinations = new ArrayList<>();
-
-        for (String adjective : TEAM_NAME_ADJECTIVES) {
-            for (String noun : TEAM_NAME_NOUNS) {
-                combinations.add(adjective + " " + noun);
-            }
-        }
-
-        Collections.shuffle(combinations, SESSION_CODE_RANDOM);
 
         for (int index = 0; index < teamCount; index++) {
-            String name = index < combinations.size()
-                    ? combinations.get(index)
-                    : combinations.get(index % combinations.size()) + " " + (index + 1);
-            generatedNames.add(new TeamNameDraft(name, index + 1));
+            generatedNames.add(new TeamNameDraft("Команда " + (index + 1), index + 1));
         }
 
         return generatedNames;
