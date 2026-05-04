@@ -656,14 +656,12 @@ public class GameSessionCommandService {
                 );
             }
 
-            boolean hasExecutor = teamRoles.stream()
-                    .anyMatch(role -> GameRoleCatalog.EXECUTOR_ROLES.stream().anyMatch(role::equalsIgnoreCase));
-
-            if (!hasExecutor) {
+            List<String> missingExecutorContours = resolveMissingExecutorContours(teamRoles);
+            if (!missingExecutorContours.isEmpty()) {
                 throw new ResponseStatusException(
                         HttpStatus.CONFLICT,
-                        "Перед стартом игры в команде '%s' должна быть назначена хотя бы одна исполнительская роль."
-                                .formatted(team.getName())
+                        "Перед стартом игры в команде '%s' должны быть назначены минимум два исполнителя: один медицинского контура и один инженерного. Сейчас не хватает: %s."
+                                .formatted(team.getName(), String.join(", ", missingExecutorContours))
                 );
             }
         }
@@ -671,10 +669,10 @@ public class GameSessionCommandService {
 
 
     private void validateTeamHasRequiredLeadershipCapacity(SessionTeam team, List<SessionParticipant> teamParticipants) {
-        if (teamParticipants.size() < GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.size() + 1) {
+        if (teamParticipants.size() < GameRoleCatalog.MANDATORY_LEADERSHIP_ROLES.size() + 2) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "В команде '%s' недостаточно участников: нужны все руководящие роли и хотя бы один исполнитель."
+                    "В команде '%s' недостаточно участников: нужны все руководящие роли и минимум два исполнителя, по одному для медицинского и инженерного контуров."
                             .formatted(team.getName())
             );
         }
@@ -702,19 +700,7 @@ public class GameSessionCommandService {
                 .filter(participant -> !leadershipParticipantIds.contains(participant.getId()))
                 .toList();
 
-        if (remainingParticipants.size() <= GameRoleCatalog.EXECUTOR_ROLES.size()) {
-            List<Assignment> executorAssignments = new ArrayList<>();
-            if (!assignUniqueExecutorRoles(remainingParticipants, 0, new ArrayList<>(GameRoleCatalog.EXECUTOR_ROLES), executorAssignments)) {
-                throw new ResponseStatusException(
-                        HttpStatus.CONFLICT,
-                        "Невозможно назначить уникальные исполнительские роли в команде '%s' без совпадения с реальными должностями.".formatted(team.getName())
-                );
-            }
-
-            executorAssignments.forEach(assignment -> assignment.participant().assignGameRole(assignment.role()));
-        } else {
-            assignRepeatingExecutorRoles(remainingParticipants);
-        }
+        assignExecutorRoles(team, remainingParticipants);
     }
 
     private boolean assignLeadershipRoles(
@@ -811,6 +797,132 @@ public class GameSessionCommandService {
         }
 
         return false;
+    }
+
+    private void assignExecutorRoles(SessionTeam team, List<SessionParticipant> participants) {
+        if (participants.size() < 2) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "В команде '%s' недостаточно участников: нужны минимум два исполнителя, по одному для медицинского и инженерного контуров."
+                            .formatted(team.getName())
+            );
+        }
+
+        List<Assignment> contourAssignments = new ArrayList<>();
+        if (!assignContourExecutors(participants, contourAssignments)) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Невозможно назначить в команде '%s' исполнителей сразу для медицинского и инженерного контуров без совпадения с реальными должностями."
+                            .formatted(team.getName())
+            );
+        }
+
+        contourAssignments.forEach(assignment -> assignment.participant().assignGameRole(assignment.role()));
+
+        Set<Long> assignedParticipantIds = contourAssignments.stream()
+                .map(assignment -> assignment.participant().getId())
+                .collect(Collectors.toSet());
+        Set<String> assignedRoles = contourAssignments.stream()
+                .map(Assignment::role)
+                .collect(Collectors.toSet());
+
+        List<SessionParticipant> remainingParticipants = participants.stream()
+                .filter(participant -> !assignedParticipantIds.contains(participant.getId()))
+                .toList();
+
+        if (remainingParticipants.isEmpty()) {
+            return;
+        }
+
+        List<String> remainingAvailableRoles = GameRoleCatalog.EXECUTOR_ROLES.stream()
+                .filter(role -> !assignedRoles.contains(role))
+                .toList();
+
+        if (remainingParticipants.size() <= remainingAvailableRoles.size()) {
+            List<Assignment> executorAssignments = new ArrayList<>();
+            if (!assignUniqueExecutorRoles(remainingParticipants, 0, new ArrayList<>(remainingAvailableRoles), executorAssignments)) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Невозможно назначить уникальные исполнительские роли в команде '%s' без совпадения с реальными должностями."
+                                .formatted(team.getName())
+                );
+            }
+
+            executorAssignments.forEach(assignment -> assignment.participant().assignGameRole(assignment.role()));
+            return;
+        }
+
+        assignRepeatingExecutorRoles(remainingParticipants);
+    }
+
+    private boolean assignContourExecutors(
+            List<SessionParticipant> participants,
+            List<Assignment> assignments
+    ) {
+        return assignContourExecutors(
+                participants,
+                List.of(GameRoleCatalog.MEDICAL_EXECUTOR_ROLES, GameRoleCatalog.ENGINEERING_EXECUTOR_ROLES),
+                0,
+                assignments
+        );
+    }
+
+    private boolean assignContourExecutors(
+            List<SessionParticipant> participants,
+            List<List<String>> contourRoleGroups,
+            int contourIndex,
+            List<Assignment> assignments
+    ) {
+        if (contourIndex >= contourRoleGroups.size()) {
+            return true;
+        }
+
+        List<SessionParticipant> shuffledParticipants = new ArrayList<>(participants);
+        Collections.shuffle(shuffledParticipants, ThreadLocalRandom.current());
+        List<String> contourRoles = contourRoleGroups.get(contourIndex);
+
+        for (SessionParticipant participant : shuffledParticipants) {
+            boolean alreadyAssigned = assignments.stream()
+                    .anyMatch(assignment -> assignment.participant().getId().equals(participant.getId()));
+            if (alreadyAssigned) {
+                continue;
+            }
+
+            List<String> shuffledRoles = new ArrayList<>(contourRoles);
+            Collections.shuffle(shuffledRoles, ThreadLocalRandom.current());
+
+            for (String role : shuffledRoles) {
+                if (participant.getPlayer().getHospitalPosition().equalsIgnoreCase(role)) {
+                    continue;
+                }
+
+                assignments.add(new Assignment(participant, role));
+                if (assignContourExecutors(participants, contourRoleGroups, contourIndex + 1, assignments)) {
+                    return true;
+                }
+                assignments.removeLast();
+            }
+        }
+
+        return false;
+    }
+
+    private List<String> resolveMissingExecutorContours(List<String> teamRoles) {
+        List<String> missingContours = new ArrayList<>();
+
+        boolean hasMedicalExecutor = teamRoles.stream()
+                .anyMatch(role -> GameRoleCatalog.MEDICAL_EXECUTOR_ROLES.stream().anyMatch(role::equalsIgnoreCase));
+        boolean hasEngineeringExecutor = teamRoles.stream()
+                .anyMatch(role -> GameRoleCatalog.ENGINEERING_EXECUTOR_ROLES.stream().anyMatch(role::equalsIgnoreCase));
+
+        if (!hasMedicalExecutor) {
+            missingContours.add("медицинский исполнитель");
+        }
+        if (!hasEngineeringExecutor) {
+            missingContours.add("инженерный исполнитель");
+        }
+
+        return missingContours;
     }
 
     private void validateStageSettings(List<GameSessionStageSettingsRequest.StageItem> stages) {

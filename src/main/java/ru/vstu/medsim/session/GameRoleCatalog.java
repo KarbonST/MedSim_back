@@ -18,6 +18,16 @@ public final class GameRoleCatalog {
             "Заместитель главного инженера по АХЧ"
     );
 
+    public static final List<String> MEDICAL_EXECUTOR_ROLES = List.of(
+            "Сестра поликлинического отделения",
+            "Сестра диагностического отделения"
+    );
+
+    public static final List<String> ENGINEERING_EXECUTOR_ROLES = List.of(
+            "Заместитель главного инженера по медтехнике",
+            "Заместитель главного инженера по АХЧ"
+    );
+
     public static final Set<String> INVENTORY_ACCESS_ROLES = Set.copyOf(MANDATORY_LEADERSHIP_ROLES);
 
     private GameRoleCatalog() {
