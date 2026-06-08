@@ -594,7 +594,8 @@ public class SessionEconomyService {
                         team,
                         teamStateByTeamId.get(team.getId()),
                         roomStatesByTeamId.getOrDefault(team.getId(), List.of()),
-                        problemStatesByRoomStateId
+                        problemStatesByRoomStateId,
+                        session.getActiveStageNumber()
                 ))
                 .toList();
 
@@ -628,7 +629,7 @@ public class SessionEconomyService {
                         Collectors.toList()
                 ));
 
-        return toTeamItem(team, teamState, roomStates, problemStatesByRoomStateId);
+        return toTeamItem(team, teamState, roomStates, problemStatesByRoomStateId, team.getGameSession().getActiveStageNumber());
     }
 
     private void settleStageForTeam(SessionTeam team, Integer stageNumber) {
@@ -735,14 +736,19 @@ public class SessionEconomyService {
             SessionTeam team,
             TeamEconomyState state,
             List<TeamRoomState> roomStates,
-            Map<Long, List<TeamProblemState>> problemStatesByRoomStateId
+            Map<Long, List<TeamProblemState>> problemStatesByRoomStateId,
+            Integer activeStageNumber
     ) {
         if (state == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Экономика команды '%s' не найдена.".formatted(team.getName()));
         }
 
         List<TeamRoomEconomyItem> roomItems = roomStates.stream()
-                .map(roomState -> toRoomItem(roomState, problemStatesByRoomStateId.getOrDefault(roomState.getId(), List.of())))
+                .map(roomState -> toRoomItem(
+                        roomState,
+                        problemStatesByRoomStateId.getOrDefault(roomState.getId(), List.of()),
+                        activeStageNumber
+                ))
                 .toList();
         List<TeamResourceReservation> activeReservations = teamResourceReservationRepository
                 .findAllByTeamIdAndStatusOrderByCreatedAtAscIdAsc(team.getId(), ResourceReservationStatus.RESERVED);
@@ -793,9 +799,16 @@ public class SessionEconomyService {
         );
     }
 
-    private TeamRoomEconomyItem toRoomItem(TeamRoomState roomState, List<TeamProblemState> problemStates) {
+    private TeamRoomEconomyItem toRoomItem(
+            TeamRoomState roomState,
+            List<TeamProblemState> problemStates,
+            Integer activeStageNumber
+    ) {
         FinalStageCrisisType crisisType = roomState.getTeam().getGameSession().getFinalStageCrisisType();
-        List<TeamProblemState> activeProblemStates = problemStates.stream()
+        List<TeamProblemState> visibleProblemStates = problemStates.stream()
+                .filter(problemState -> isReleasedByStage(problemState, activeStageNumber))
+                .toList();
+        List<TeamProblemState> activeProblemStates = visibleProblemStates.stream()
                 .filter(problemState -> problemState.getStatus() != SessionProblemStatus.RESOLVED)
                 .toList();
 
@@ -808,7 +821,7 @@ public class SessionEconomyService {
                 ? worstSeverity.getStateCoefficient()
                 : BigDecimal.ONE.setScale(2);
 
-        List<TeamProblemEconomyItem> problemItems = problemStates.stream()
+        List<TeamProblemEconomyItem> problemItems = visibleProblemStates.stream()
                 .map(problemState -> new TeamProblemEconomyItem(
                         problemState.getId(),
                         problemState.getProblemTemplate().getProblemNumber(),

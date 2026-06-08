@@ -419,7 +419,9 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(jsonPath("$.teamKanbanBoard.cards[0].solutionOptions[1].title").value("Вызов соответствующей службы/мастера"))
                 .andReturn();
 
-        assertSolutionProbabilityHintsHidden(objectMapper.readTree(workspaceResult.getResponse().getContentAsString()));
+        JsonNode workspace = objectMapper.readTree(workspaceResult.getResponse().getContentAsString());
+        assertSolutionProbabilityHintsHidden(workspace);
+        assertNoFutureRoomProblemsVisible(workspace, 1);
 
         mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -2569,6 +2571,16 @@ class PlayerSessionControllerIntegrationTest {
                 String description = option.path("description").asText("");
                 assertThat(description).doesNotContain("Вероятность по методике");
                 assertThat(description).doesNotContain("Коэффициенты ролей");
+            }
+        }
+    }
+
+    private void assertNoFutureRoomProblemsVisible(JsonNode workspace, int activeStageNumber) {
+        for (JsonNode room : workspace.path("teamEconomy").path("rooms")) {
+            for (JsonNode problem : room.path("problems")) {
+                assertThat(problem.path("stageNumber").asInt())
+                        .as("Проблема будущего этапа не должна быть видна в схеме кабинета")
+                        .isLessThanOrEqualTo(activeStageNumber);
             }
         }
     }
