@@ -1358,6 +1358,24 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
+    void shouldAllowFacilitatorToRemoveDuplicateParticipantBeforeStart() throws Exception {
+        String sessionCode = createSession("Командная сессия", 2);
+        joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);
+        joinPlayer("Анна Петрова 2", "Главная медсестра", sessionCode);
+
+        Long duplicateParticipantId = participantIdByName(sessionCode, "Анна Петрова 2");
+
+        mockMvc.perform(delete("/api/game-sessions/{sessionCode}/participants/{participantId}", sessionCode, duplicateParticipantId)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.participants.length()").value(1))
+                .andExpect(jsonPath("$.participants[0].displayName").value("Анна Петрова"));
+
+        assertThat(count("session_participants")).isEqualTo(1);
+        assertThat(count("players")).isEqualTo(1);
+    }
+
+    @Test
     void shouldRequireTeamBeforeManualRoleAssignment() throws Exception {
         String sessionCode = createSession("Тестовая смена", 2);
         joinPlayer("Анна Петрова", "Главная медсестра", sessionCode);

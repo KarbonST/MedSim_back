@@ -348,6 +348,37 @@ public class GameSessionCommandService {
     }
 
     @Transactional
+    public GameSessionParticipantsResponse removeParticipant(String sessionCode, Long participantId) {
+        GameSession session = getLobbySessionOrThrow(sessionCode);
+        SessionParticipant participant = sessionParticipantRepository
+                .findByIdAndGameSessionId(participantId, session.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Участник не найден."));
+
+        Long playerId = participant.getPlayer().getId();
+        String playerName = participant.getPlayer().getDisplayName();
+
+        sessionParticipantRepository.delete(participant);
+        sessionParticipantRepository.flush();
+
+        boolean deletedPlayer = false;
+        if (!sessionParticipantRepository.existsByPlayerId(playerId)) {
+            playerRepository.deleteById(playerId);
+            deletedPlayer = true;
+        }
+
+        log.info(
+                "Participant removed from session: sessionCode={}, participantId={}, playerId={}, playerName={}, deletedPlayer={}",
+                session.getCode(),
+                participantId,
+                playerId,
+                playerName,
+                deletedPlayer
+        );
+
+        return gameSessionQueryService.getParticipants(sessionCode);
+    }
+
+    @Transactional
     public GameSessionParticipantsResponse selectRuntimeStage(String sessionCode, SessionRuntimeStageRequest request) {
         GameSession session = getRuntimeEditableSessionOrThrow(sessionCode);
         SessionStageSetting stage = getStageOrThrow(session, request.stageNumber());

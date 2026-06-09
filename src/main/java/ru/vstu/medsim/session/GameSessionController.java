@@ -179,6 +179,14 @@ public class GameSessionController {
         return gameSessionCommandService.assignManualRole(sessionCode, participantId, request);
     }
 
+    @DeleteMapping("/{sessionCode}/participants/{participantId}")
+    public GameSessionParticipantsResponse removeParticipant(
+            @PathVariable String sessionCode,
+            @PathVariable Long participantId
+    ) {
+        return gameSessionCommandService.removeParticipant(sessionCode, participantId);
+    }
+
     @PatchMapping("/{sessionCode}/runtime/stage")
     public GameSessionParticipantsResponse selectRuntimeStage(
             @PathVariable String sessionCode,
