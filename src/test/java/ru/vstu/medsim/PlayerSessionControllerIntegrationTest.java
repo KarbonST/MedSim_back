@@ -255,16 +255,35 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
-    void shouldReturnAvailableLobbySessionsForPlayers() throws Exception {
+    void shouldReturnOnlyNonFinishedSessionsForPlayers() throws Exception {
         String lobbySessionCode = createSession("Приёмное отделение", 2);
         String startedSessionCode = createSession("Инженерный штаб", 2);
+        String pausedSessionCode = createSession("Пауза отделения", 2);
+        String finishedSessionCode = createSession("Завершённая смена", 2);
 
         prepareStartedTwoTeamSession(startedSessionCode);
+        prepareStartedTwoTeamSession(pausedSessionCode);
+        prepareStartedTwoTeamSession(finishedSessionCode);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/pause", pausedSessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/finish", finishedSessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk());
 
         mockMvc.perform(get("/api/player-sessions/available"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].sessionCode").value(lobbySessionCode));
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath(
+                        "$[*].sessionCode",
+                        containsInAnyOrder(lobbySessionCode, startedSessionCode, pausedSessionCode)
+                ))
+                .andExpect(jsonPath(
+                        "$[*].sessionStatus",
+                        containsInAnyOrder("LOBBY", "IN_PROGRESS", "PAUSED")
+                ));
     }
 
     @Test

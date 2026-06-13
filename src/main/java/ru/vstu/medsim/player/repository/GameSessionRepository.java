@@ -16,5 +16,5 @@ public interface GameSessionRepository extends JpaRepository<GameSession, Long> 
 
     List<GameSession> findAll(Sort sort);
 
-    List<GameSession> findAllByStatusOrderByCreatedAtDescIdDesc(GameSessionStatus status);
+    List<GameSession> findAllByStatusNotOrderByCreatedAtDescIdDesc(GameSessionStatus status);
 }

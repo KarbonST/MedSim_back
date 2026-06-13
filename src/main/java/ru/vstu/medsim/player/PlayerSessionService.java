@@ -70,13 +70,14 @@ public class PlayerSessionService {
 
     @Transactional(readOnly = true)
     public List<AvailablePlayerSessionResponse> getAvailableSessions() {
-        return gameSessionRepository.findAllByStatusOrderByCreatedAtDescIdDesc(GameSessionStatus.LOBBY)
+        return gameSessionRepository.findAllByStatusNotOrderByCreatedAtDescIdDesc(GameSessionStatus.FINISHED)
                 .stream()
                 .map(session -> new AvailablePlayerSessionResponse(
                         session.getId(),
                         session.getCode(),
                         session.getName(),
-                        sessionParticipantRepository.countByGameSessionId(session.getId())
+                        sessionParticipantRepository.countByGameSessionId(session.getId()),
+                        session.getStatus().name()
                 ))
                 .toList();
     }
