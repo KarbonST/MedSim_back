@@ -17,6 +17,7 @@ public class TeamChatWebSocketConfig implements WebSocketConfigurer {
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(teamChatWebSocketHandler, "/ws/team-chat");
+        registry.addHandler(teamChatWebSocketHandler, "/ws/team-chat")
+                .setAllowedOriginPatterns("*");
     }
 }
