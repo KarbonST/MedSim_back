@@ -721,6 +721,73 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
+    void shouldAllowDepartmentLeadToReturnAssignedTaskToCurrentStagePool() throws Exception {
+        String sessionCode = createSession("Канбан возврат руководителя в пул", 2);
+        prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
+        selectCurrentStage(sessionCode, 1);
+        Long chiefDoctorId = participantIdByName(sessionCode, "Анна Петрова");
+        Long engineeringLeadId = participantIdByName(sessionCode, "Павел Орлов");
+        Long teamId = firstTeamId(sessionCode);
+        Long cardId = firstKanbanCardId(sessionCode, teamId);
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "status", "ASSIGNED",
+                                "priority", "HIGH",
+                                "responsibleDepartment", "ENGINEERING"
+                        ))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringLeadId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "REGISTERED"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("REGISTERED"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].responsibleDepartment").value(nullValue()))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].assigneeParticipantId").value(nullValue()))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].history[2].eventType").value("RETURNED_TO_STAGE"));
+    }
+
+    @Test
+    void shouldAllowChiefDoctorToReturnReadyForWorkTaskToCurrentStagePool() throws Exception {
+        String sessionCode = createSession("Канбан возврат главврача в пул", 2);
+        prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
+        selectCurrentStage(sessionCode, 1);
+        Long chiefDoctorId = participantIdByName(sessionCode, "Анна Петрова");
+        Long engineeringLeadId = participantIdByName(sessionCode, "Павел Орлов");
+        Long engineeringExecutorId = participantIdByName(sessionCode, "Дмитрий Ковалёв");
+        Long teamId = firstTeamId(sessionCode);
+        Long cardId = firstKanbanCardId(sessionCode, teamId);
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "status", "ASSIGNED",
+                                "priority", "HIGH",
+                                "responsibleDepartment", "ENGINEERING"
+                        ))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, engineeringLeadId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "status", "READY_FOR_WORK",
+                                "assigneeParticipantId", engineeringExecutorId
+                        ))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, chiefDoctorId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "REGISTERED"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].status").value("REGISTERED"))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].responsibleDepartment").value(nullValue()))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].assigneeParticipantId").value(nullValue()))
+                .andExpect(jsonPath("$.teamKanbanBoard.cards[0].history[3].eventType").value("RETURNED_TO_STAGE"));
+    }
+
+    @Test
     void shouldReturnKanbanCardToStageTasksWhenDepartmentApprovalFails() throws Exception {
         String sessionCode = createSession("Канбан возврат", 2);
         prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);

@@ -81,6 +81,12 @@ public class KanbanService {
             KanbanCardStatus.READY_FOR_WORK,
             KanbanCardStatus.REWORK
     );
+    private static final Set<KanbanCardStatus> RETURNABLE_TO_STAGE_STATUSES = Set.of(
+            KanbanCardStatus.ASSIGNED,
+            KanbanCardStatus.READY_FOR_WORK,
+            KanbanCardStatus.REWORK,
+            KanbanCardStatus.HOLD
+    );
 
     private final TeamProblemStateRepository teamProblemStateRepository;
     private final TeamKanbanCardRepository teamKanbanCardRepository;
@@ -551,10 +557,13 @@ public class KanbanService {
             ensureDepartmentLead(actor, requireResponsibleDepartment(card));
         } else if (card.getStatus() == KanbanCardStatus.CHIEF_DOCTOR_REVIEW) {
             ensureChiefDoctor(actor);
-        } else if (card.getStatus() == KanbanCardStatus.HOLD) {
-            ensureCanManageHeldCard(actor, card);
+        } else if (RETURNABLE_TO_STAGE_STATUSES.contains(card.getStatus())) {
+            ensureCanManageStagePoolReturn(actor, card);
         } else {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Вернуть в задачи этапа можно только карточку на согласовании или в отложенных.");
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Вернуть в задачи этапа можно только карточку до начала работы, на согласовании или в отложенных."
+            );
         }
 
         sessionEconomyService.releaseReservedResources(actor, card);
@@ -576,7 +585,7 @@ public class KanbanService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Отложить можно только задачу, которая ещё не находится в активной работе или на согласовании.");
         }
 
-        ensureCanManageHeldCard(actor, card);
+        ensureCanManageStagePoolReturn(actor, card);
 
         KanbanCardStatus fromStatus = card.getStatus();
         KanbanResponsibleDepartment responsibleDepartment = card.getResponsibleDepartment();
@@ -807,7 +816,7 @@ public class KanbanService {
         }
     }
 
-    private void ensureCanManageHeldCard(SessionParticipant actor, TeamKanbanCard card) {
+    private void ensureCanManageStagePoolReturn(SessionParticipant actor, TeamKanbanCard card) {
         if (CHIEF_DOCTOR_ROLE.equals(actor.getGameRole())) {
             return;
         }
@@ -818,7 +827,10 @@ public class KanbanService {
             return;
         }
 
-        throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Отложить или вернуть отложенную задачу могут только главврач и руководитель ответственного подразделения.");
+        throw new ResponseStatusException(
+                HttpStatus.FORBIDDEN,
+                "Вернуть карточку в общий пул текущего этапа может только главврач или руководитель ответственного подразделения."
+        );
     }
 
     private boolean isSolutionSuccessful(TeamKanbanCard card, KanbanSolutionOption option) {
