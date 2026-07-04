@@ -1190,6 +1190,31 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
+    void shouldAutoFinishExpiredSessionWhenFinalStageTimerElapses() throws Exception {
+        String sessionCode = createSession("Автофиниш по таймеру", 2);
+        prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
+        Long annaId = participantIdByName(sessionCode, "Анна Петрова");
+
+        selectCurrentStage(sessionCode, 3);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/runtime/timer/start", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionRuntime.timerStatus").value("RUNNING"));
+
+        expireRunningTimer(sessionCode);
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, annaId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("FINISHED"))
+                .andExpect(jsonPath("$.sessionRuntime.timerStatus").value("STOPPED"))
+                .andExpect(jsonPath("$.sessionRuntime.remainingSeconds").value(0));
+
+        assertThat(sessionStatus(sessionCode)).isEqualTo("FINISHED");
+        assertThat(timerStatus(sessionCode)).isEqualTo("STOPPED");
+    }
+
+    @Test
     void shouldRejectPlayerKanbanActionsWhileSessionIsPaused() throws Exception {
         String sessionCode = createSession("Жесткая пауза карточек", 2);
         prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);

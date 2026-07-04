@@ -544,6 +544,9 @@ public class GameSessionCommandService {
     public GameSessionParticipantsResponse finishSession(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
         gameSessionRuntimeStateService.syncExpiredTimer(session);
+        if (session.getStatus() == GameSessionStatus.FINISHED) {
+            return gameSessionQueryService.getParticipants(sessionCode);
+        }
         SessionStageSetting activeStage = session.getActiveStageNumber() != null
                 ? getStageOrThrow(session, session.getActiveStageNumber())
                 : null;
