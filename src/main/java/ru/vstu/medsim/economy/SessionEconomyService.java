@@ -239,18 +239,68 @@ public class SessionEconomyService {
                 );
             }
 
-            int problemIndex = 0;
-            for (int stageIndex = 0; stageIndex < stageProblemCounts.size(); stageIndex++) {
-                int stageNumber = stageIndex + 1;
-                int problemCount = stageProblemCounts.get(stageIndex);
-                for (int index = 0; index < problemCount; index++) {
-                    problemStates.get(problemIndex).assignStageNumber(stageNumber);
-                    problemIndex++;
-                }
-            }
+            assignProblemStagesWithRoomBalancing(problemStates, stageProblemCounts);
 
             teamProblemStateRepository.saveAll(problemStates);
         }
+    }
+
+    private void assignProblemStagesWithRoomBalancing(
+            List<TeamProblemState> problemStates,
+            List<Integer> stageProblemCounts
+    ) {
+        Map<Long, List<TeamProblemState>> problemStatesByRoomStateId = problemStates.stream()
+                .collect(Collectors.groupingBy(
+                        problemState -> problemState.getTeamRoomState().getId(),
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
+
+        int[] remainingCapacityByStage = stageProblemCounts.stream()
+                .mapToInt(Integer::intValue)
+                .toArray();
+
+        for (List<TeamProblemState> roomProblemStates : problemStatesByRoomStateId.values()) {
+            int[] roomAssignmentsByStage = new int[stageProblemCounts.size()];
+
+            for (TeamProblemState problemState : roomProblemStates) {
+                int selectedStageIndex = selectBestStageIndex(roomAssignmentsByStage, remainingCapacityByStage);
+                problemState.assignStageNumber(selectedStageIndex + 1);
+                roomAssignmentsByStage[selectedStageIndex] += 1;
+                remainingCapacityByStage[selectedStageIndex] -= 1;
+            }
+        }
+    }
+
+    private int selectBestStageIndex(int[] roomAssignmentsByStage, int[] remainingCapacityByStage) {
+        int selectedStageIndex = -1;
+
+        for (int stageIndex = 0; stageIndex < remainingCapacityByStage.length; stageIndex++) {
+            if (remainingCapacityByStage[stageIndex] <= 0) {
+                continue;
+            }
+
+            if (selectedStageIndex < 0) {
+                selectedStageIndex = stageIndex;
+                continue;
+            }
+
+            if (roomAssignmentsByStage[stageIndex] < roomAssignmentsByStage[selectedStageIndex]) {
+                selectedStageIndex = stageIndex;
+                continue;
+            }
+
+            if (roomAssignmentsByStage[stageIndex] == roomAssignmentsByStage[selectedStageIndex]
+                    && remainingCapacityByStage[stageIndex] > remainingCapacityByStage[selectedStageIndex]) {
+                selectedStageIndex = stageIndex;
+            }
+        }
+
+        if (selectedStageIndex < 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Не удалось распределить задачи по этапам.");
+        }
+
+        return selectedStageIndex;
     }
 
     @Transactional

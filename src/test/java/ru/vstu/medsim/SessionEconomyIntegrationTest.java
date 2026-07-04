@@ -283,7 +283,59 @@ class SessionEconomyIntegrationTest {
                 .andExpect(jsonPath("$.teams[0].currentStageTimeUnits").value(15))
                 .andExpect(jsonPath("$.teams[0].rooms", hasSize(10)))
                 .andExpect(jsonPath("$.teams[0].rooms[0].roomName").value("Рентген"))
-                .andExpect(jsonPath("$.teams[0].rooms[0].problems", hasSize(3)));
+                .andExpect(jsonPath("$.teams[0].rooms[0].problems", hasSize(1)));
+    }
+
+    @Test
+    void shouldBalanceRoomProblemsAcrossStagesWhenSessionIsCreated() throws Exception {
+        String sessionCode = createSession("Сессия с равномерной нагрузкой", 2, new BigDecimal("15.00"), 15);
+
+        List<String> stageDistribution = jdbcTemplate.query(
+                """
+                SELECT tps.stage_number AS stage_number, COUNT(*) AS problem_count
+                FROM team_problem_states tps
+                JOIN team_room_states trs ON trs.id = tps.team_room_state_id
+                JOIN session_teams st ON st.id = trs.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.sort_order = 1
+                GROUP BY tps.stage_number
+                ORDER BY tps.stage_number
+                """,
+                (rs, rowNum) -> rs.getInt("stage_number") + ":" + rs.getInt("problem_count"),
+                sessionCode
+        );
+
+        List<String> roomStageSpread = jdbcTemplate.query(
+                """
+                SELECT crt.code AS room_code, COUNT(DISTINCT tps.stage_number) AS stage_count
+                FROM team_problem_states tps
+                JOIN team_room_states trs ON trs.id = tps.team_room_state_id
+                JOIN clinic_room_templates crt ON crt.id = trs.clinic_room_template_id
+                JOIN session_teams st ON st.id = trs.team_id
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                  AND st.sort_order = 1
+                GROUP BY crt.code
+                ORDER BY MIN(crt.sort_order)
+                """,
+                (rs, rowNum) -> rs.getString("room_code") + ":" + rs.getInt("stage_count"),
+                sessionCode
+        );
+
+        assertThat(stageDistribution).containsExactly("1:13", "2:12", "3:12");
+        assertThat(roomStageSpread).containsExactly(
+                "XRAY:3",
+                "ULTRASOUND:3",
+                "MRI:3",
+                "EXAM_1:3",
+                "EXAM_2:3",
+                "GYNECOLOGY:3",
+                "PROCEDURE:3",
+                "REGISTRY_HALL:3",
+                "WOMEN_TOILET:3",
+                "MEN_TOILET:2"
+        );
     }
 
     @Test
