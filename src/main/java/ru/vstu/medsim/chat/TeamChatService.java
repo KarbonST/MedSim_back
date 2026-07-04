@@ -18,6 +18,7 @@ import ru.vstu.medsim.player.domain.GameSessionStatus;
 import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.GameSessionQueryService;
+import ru.vstu.medsim.session.GameSessionRuntimeStateService;
 import ru.vstu.medsim.session.domain.SessionTeam;
 import ru.vstu.medsim.session.repository.SessionTeamRepository;
 
@@ -34,6 +35,7 @@ public class TeamChatService {
     private final SessionParticipantRepository sessionParticipantRepository;
     private final SessionTeamRepository sessionTeamRepository;
     private final TeamChatMessageRepository teamChatMessageRepository;
+    private final GameSessionRuntimeStateService gameSessionRuntimeStateService;
     private final UserDetailsService userDetailsService;
     private final PasswordEncoder passwordEncoder;
 
@@ -42,6 +44,7 @@ public class TeamChatService {
             SessionParticipantRepository sessionParticipantRepository,
             SessionTeamRepository sessionTeamRepository,
             TeamChatMessageRepository teamChatMessageRepository,
+            GameSessionRuntimeStateService gameSessionRuntimeStateService,
             UserDetailsService userDetailsService,
             PasswordEncoder passwordEncoder
     ) {
@@ -49,11 +52,12 @@ public class TeamChatService {
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.sessionTeamRepository = sessionTeamRepository;
         this.teamChatMessageRepository = teamChatMessageRepository;
+        this.gameSessionRuntimeStateService = gameSessionRuntimeStateService;
         this.userDetailsService = userDetailsService;
         this.passwordEncoder = passwordEncoder;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public PlayerTeamChatResponse getPlayerChat(String sessionCode, Long participantId) {
         PlayerChatAccess access = resolvePlayerConnection(sessionCode, participantId);
         List<TeamChatMessageItem> messages = teamChatMessageRepository
@@ -65,7 +69,7 @@ public class TeamChatService {
         return new PlayerTeamChatResponse(access.team().getId(), access.team().getName(), messages);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public FacilitatorTeamChatsResponse getFacilitatorChats(String sessionCode) {
         FacilitatorChatAccess access = resolveFacilitatorConnection(sessionCode, null);
         List<SessionTeam> teams = sessionTeamRepository.findAllByGameSessionIdOrderBySortOrderAscIdAsc(access.session().getId());
@@ -100,9 +104,10 @@ public class TeamChatService {
         return toItem(message);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public PlayerChatAccess resolvePlayerConnection(String sessionCode, Long participantId) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+        gameSessionRuntimeStateService.syncExpiredTimer(session);
         SessionParticipant participant = sessionParticipantRepository.findByIdAndGameSessionId(participantId, session.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Участник не найден в указанной сессии."));
 
@@ -120,12 +125,20 @@ public class TeamChatService {
             );
         }
 
+        if (session.getStatus() == GameSessionStatus.PAUSED) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Игра поставлена на паузу. Командный чат временно заблокирован."
+            );
+        }
+
         return new PlayerChatAccess(session, participant, participant.getTeam());
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public FacilitatorChatAccess resolveFacilitatorConnection(String sessionCode, String encodedCredentials) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+        gameSessionRuntimeStateService.syncExpiredTimer(session);
 
         if (encodedCredentials != null) {
             AuthCredentials credentials = parseEncodedCredentials(encodedCredentials);
@@ -146,6 +159,9 @@ public class TeamChatService {
     private void validateMessageAllowed(GameSession session) {
         if (session.getStatus() == GameSessionStatus.LOBBY) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Командный чат станет доступен после старта игры.");
+        }
+        if (session.getStatus() == GameSessionStatus.PAUSED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Игра поставлена на паузу. Отправка сообщений временно заблокирована.");
         }
         if (session.getStatus() == GameSessionStatus.FINISHED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Игра уже завершена. Отправка сообщений недоступна.");

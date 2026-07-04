@@ -68,6 +68,7 @@ public class GameSessionCommandService {
     private final SessionTeamRepository sessionTeamRepository;
     private final TeamInventoryItemRepository teamInventoryItemRepository;
     private final TeamInventoryCatalog teamInventoryCatalog;
+    private final GameSessionRuntimeStateService gameSessionRuntimeStateService;
     private final SessionEconomyService sessionEconomyService;
     private final KanbanService kanbanService;
     private final TeamProblemStateRepository teamProblemStateRepository;
@@ -82,6 +83,7 @@ public class GameSessionCommandService {
             SessionTeamRepository sessionTeamRepository,
             TeamInventoryItemRepository teamInventoryItemRepository,
             TeamInventoryCatalog teamInventoryCatalog,
+            GameSessionRuntimeStateService gameSessionRuntimeStateService,
             SessionEconomyService sessionEconomyService,
             KanbanService kanbanService,
             TeamProblemStateRepository teamProblemStateRepository,
@@ -95,6 +97,7 @@ public class GameSessionCommandService {
         this.sessionTeamRepository = sessionTeamRepository;
         this.teamInventoryItemRepository = teamInventoryItemRepository;
         this.teamInventoryCatalog = teamInventoryCatalog;
+        this.gameSessionRuntimeStateService = gameSessionRuntimeStateService;
         this.sessionEconomyService = sessionEconomyService;
         this.kanbanService = kanbanService;
         this.teamProblemStateRepository = teamProblemStateRepository;
@@ -204,7 +207,7 @@ public class GameSessionCommandService {
             Long participantId,
             GameSessionTeamAssignmentRequest request
     ) {
-        GameSession session = getLobbySessionOrThrow(sessionCode);
+        GameSession session = getParticipantAssignmentSessionOrThrow(sessionCode);
         SessionParticipant participant = sessionParticipantRepository
                 .findByIdAndGameSessionId(participantId, session.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Участник не найден."));
@@ -213,7 +216,7 @@ public class GameSessionCommandService {
             participant.assignTeam(null);
 
             if (teamChanged) {
-                clearRolesForParticipants(sessionParticipantRepository.findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId()));
+                resetRolesAfterTeamChange(session, participant);
             }
 
             return gameSessionQueryService.getParticipants(sessionCode);
@@ -226,7 +229,7 @@ public class GameSessionCommandService {
         participant.assignTeam(team);
 
         if (teamChanged) {
-            clearRolesForParticipants(sessionParticipantRepository.findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId()));
+            resetRolesAfterTeamChange(session, participant);
         }
 
         return gameSessionQueryService.getParticipants(sessionCode);
@@ -331,7 +334,7 @@ public class GameSessionCommandService {
             Long participantId,
             GameSessionRoleAssignmentRequest request
     ) {
-        GameSession session = getLobbySessionOrThrow(sessionCode);
+        GameSession session = getParticipantAssignmentSessionOrThrow(sessionCode);
         SessionParticipant participant = sessionParticipantRepository
                 .findByIdAndGameSessionId(participantId, session.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Участник не найден."));
@@ -345,6 +348,15 @@ public class GameSessionCommandService {
 
         participant.assignGameRole(request.gameRole().trim());
         return toParticipantItem(participant);
+    }
+
+    private void resetRolesAfterTeamChange(GameSession session, SessionParticipant participant) {
+        if (session.getStatus() == GameSessionStatus.LOBBY) {
+            clearRolesForParticipants(sessionParticipantRepository.findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId()));
+            return;
+        }
+
+        participant.clearGameRole();
     }
 
     @Transactional
@@ -466,6 +478,7 @@ public class GameSessionCommandService {
     @Transactional
     public GameSessionParticipantsResponse startSession(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+        gameSessionRuntimeStateService.syncExpiredTimer(session);
         boolean startingFromLobby = session.getStatus() == GameSessionStatus.LOBBY;
         List<SessionStageSetting> stages = sessionStageSettingRepository.findAllByGameSessionIdOrderByStageNumberAsc(session.getId());
 
@@ -514,6 +527,7 @@ public class GameSessionCommandService {
     @Transactional
     public GameSessionParticipantsResponse pauseSession(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+        gameSessionRuntimeStateService.syncExpiredTimer(session);
 
         try {
             session.pause();
@@ -529,6 +543,7 @@ public class GameSessionCommandService {
     @Transactional
     public GameSessionParticipantsResponse finishSession(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+        gameSessionRuntimeStateService.syncExpiredTimer(session);
         SessionStageSetting activeStage = session.getActiveStageNumber() != null
                 ? getStageOrThrow(session, session.getActiveStageNumber())
                 : null;
@@ -628,6 +643,7 @@ public class GameSessionCommandService {
 
     private GameSession getRuntimeEditableSessionOrThrow(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+        gameSessionRuntimeStateService.syncExpiredTimer(session);
 
         if (session.getStatus() == GameSessionStatus.FINISHED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Управление этапами и таймером недоступно после завершения игры.");
@@ -1043,6 +1059,19 @@ public class GameSessionCommandService {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
                     "Настройки этапов, команд и ролей можно менять только до старта игры."
+            );
+        }
+
+        return session;
+    }
+
+    private GameSession getParticipantAssignmentSessionOrThrow(String sessionCode) {
+        GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+
+        if (session.getStatus() == GameSessionStatus.FINISHED) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Назначение команд и ролей недоступно после завершения игры."
             );
         }
 

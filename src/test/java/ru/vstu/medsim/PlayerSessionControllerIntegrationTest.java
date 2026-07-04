@@ -16,6 +16,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -342,7 +344,7 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
-    void shouldRejectJoinWhenNewParticipantTargetsStartedSession() throws Exception {
+    void shouldAllowNewParticipantToJoinStartedSessionAsUnassigned() throws Exception {
         String sessionCode = createSession("Тестовая смена", 2);
         prepareStartedTwoTeamSession(sessionCode);
 
@@ -355,11 +357,26 @@ class PlayerSessionControllerIntegrationTest {
         mockMvc.perform(post("/api/player-sessions/join")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isConflict())
-                .andExpect(header().exists("X-Request-Id"))
-                .andExpect(jsonPath("$.message").value(
-                        "Не удалось вернуться в сессию. Проверьте код комнаты, имя и должность: повторный вход после старта доступен только под теми же данными, которые использовались раньше."
-                ));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("IN_PROGRESS"))
+                .andExpect(jsonPath("$.displayName").value("Новый Участник"))
+                .andExpect(jsonPath("$.gameRole").value(nullValue()));
+
+        Map<String, Object> participantState = jdbcTemplate.queryForMap(
+                """
+                SELECT sp.team_id, sp.game_role
+                FROM session_participants sp
+                JOIN game_sessions gs ON gs.id = sp.game_session_id
+                JOIN players p ON p.id = sp.player_id
+                WHERE gs.code = ?
+                  AND p.display_name = ?
+                """,
+                sessionCode,
+                "Новый Участник"
+        );
+
+        assertThat(participantState.get("team_id")).isNull();
+        assertThat(participantState.get("game_role")).isNull();
     }
 
     @Test
@@ -1142,6 +1159,74 @@ class PlayerSessionControllerIntegrationTest {
     }
 
     @Test
+    void shouldAutoPauseExpiredSessionWhenPlayerWorkspaceIsRequested() throws Exception {
+        String sessionCode = createSession("Автопауза по таймеру", 2);
+        prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
+        Long annaId = participantIdByName(sessionCode, "Анна Петрова");
+
+        selectCurrentStage(sessionCode, 2);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/runtime/timer/start", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionRuntime.timerStatus").value("RUNNING"));
+
+        expireRunningTimer(sessionCode);
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/workspace", sessionCode, annaId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("PAUSED"))
+                .andExpect(jsonPath("$.sessionRuntime.timerStatus").value("PAUSED"))
+                .andExpect(jsonPath("$.sessionRuntime.remainingSeconds").value(0))
+                .andExpect(jsonPath("$.teamKanbanBoard").value(nullValue()))
+                .andExpect(jsonPath("$.teamEconomy").value(nullValue()))
+                .andExpect(jsonPath("$.inventoryVisible").value(false))
+                .andExpect(jsonPath("$.teamInventory.length()").value(0))
+                .andExpect(jsonPath("$.kanbanNotifications.length()").value(0))
+                .andExpect(jsonPath("$.teammates.length()").value(0));
+
+        assertThat(sessionStatus(sessionCode)).isEqualTo("PAUSED");
+        assertThat(timerStatus(sessionCode)).isEqualTo("PAUSED");
+    }
+
+    @Test
+    void shouldRejectPlayerKanbanActionsWhileSessionIsPaused() throws Exception {
+        String sessionCode = createSession("Жесткая пауза карточек", 2);
+        prepareStartedTwoTeamSessionWithKanbanStage(sessionCode);
+        Long ivanId = participantIdByName(sessionCode, "Иван Сидоров");
+        Long cardId = firstKanbanCardId(sessionCode, firstTeamId(sessionCode));
+
+        selectCurrentStage(sessionCode, 2);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/pause", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("PAUSED"));
+
+        mockMvc.perform(patch("/api/player-sessions/{sessionCode}/participants/{participantId}/kanban/cards/{cardId}/status", sessionCode, ivanId, cardId)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("status", "IN_PROGRESS"))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(containsString("Игровые действия временно заблокированы")));
+    }
+
+    @Test
+    void shouldRejectPlayerChatWhileSessionIsPaused() throws Exception {
+        String sessionCode = createSession("Жесткая пауза чата", 2);
+        prepareStartedTwoTeamSession(sessionCode);
+        Long annaId = participantIdByName(sessionCode, "Анна Петрова");
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/pause", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("PAUSED"));
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/chat", sessionCode, annaId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(containsString("Командный чат временно заблокирован")));
+    }
+
+    @Test
     void shouldRestartFinishedSessionWithoutLosingParticipants() throws Exception {
         String sessionCode = createSession("Перезапуск сессии", 2);
         prepareStartedTwoTeamSession(sessionCode);
@@ -1423,6 +1508,59 @@ class PlayerSessionControllerIntegrationTest {
                         .content(objectMapper.writeValueAsString(Map.of("teamId", teamId))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.participants[0].teamId").value(teamId));
+    }
+
+    @Test
+    void shouldAssignLateParticipantAfterStartWithoutResettingExistingRoles() throws Exception {
+        String sessionCode = createSession("Командная сессия", 2);
+        prepareStartedTwoTeamSession(sessionCode);
+        joinPlayer("Новый Участник", "Старшая медсестра", sessionCode);
+
+        Long lateParticipantId = participantIdByName(sessionCode, "Новый Участник");
+        Long firstTeamId = firstTeamId(sessionCode);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/participants/{participantId}/team", sessionCode, lateParticipantId)
+                        .with(auth())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("teamId", firstTeamId))))
+                .andExpect(status().isOk());
+
+        assignManualRole(sessionCode, lateParticipantId, "Сестра поликлинического отделения");
+
+        Map<String, Object> lateParticipantState = jdbcTemplate.queryForMap(
+                """
+                SELECT sp.team_id, sp.game_role
+                FROM session_participants sp
+                JOIN game_sessions gs ON gs.id = sp.game_session_id
+                JOIN players p ON p.id = sp.player_id
+                WHERE gs.code = ?
+                  AND p.display_name = ?
+                """,
+                sessionCode,
+                "Новый Участник"
+        );
+
+        List<String> assignedRoles = jdbcTemplate.queryForList(
+                """
+                SELECT p.display_name || ':' || sp.game_role
+                FROM session_participants sp
+                JOIN game_sessions gs ON gs.id = sp.game_session_id
+                JOIN players p ON p.id = sp.player_id
+                WHERE gs.code = ?
+                ORDER BY p.display_name
+                """,
+                String.class,
+                sessionCode
+        );
+
+        assertThat(((Number) lateParticipantState.get("team_id")).longValue()).isEqualTo(firstTeamId);
+        assertThat(lateParticipantState.get("game_role")).isEqualTo("Сестра поликлинического отделения");
+        assertThat(assignedRoles).contains(
+                "Анна Петрова:Главный врач",
+                "Иван Сидоров:Главная медсестра",
+                "Павел Орлов:Главный инженер",
+                "Новый Участник:Сестра поликлинического отделения"
+        );
     }
 
     @Test
@@ -2590,6 +2728,38 @@ class PlayerSessionControllerIntegrationTest {
                 Long.class,
                 sessionCode,
                 teamId
+        );
+    }
+
+    private void expireRunningTimer(String sessionCode) {
+        jdbcTemplate.update(
+                """
+                UPDATE game_sessions
+                SET timer_remaining_seconds = ?,
+                    timer_status = ?,
+                    timer_updated_at = ?
+                WHERE code = ?
+                """,
+                1,
+                "RUNNING",
+                Timestamp.valueOf(LocalDateTime.now().minusSeconds(3)),
+                sessionCode
+        );
+    }
+
+    private String sessionStatus(String sessionCode) {
+        return jdbcTemplate.queryForObject(
+                "SELECT status FROM game_sessions WHERE code = ?",
+                String.class,
+                sessionCode
+        );
+    }
+
+    private String timerStatus(String sessionCode) {
+        return jdbcTemplate.queryForObject(
+                "SELECT timer_status FROM game_sessions WHERE code = ?",
+                String.class,
+                sessionCode
         );
     }
 

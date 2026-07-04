@@ -38,6 +38,7 @@ public class GameSessionQueryService {
     private final SessionStageSettingRepository sessionStageSettingRepository;
     private final SessionTeamRepository sessionTeamRepository;
     private final SessionRuntimeSnapshotService sessionRuntimeSnapshotService;
+    private final GameSessionRuntimeStateService gameSessionRuntimeStateService;
     private final ClinicRoomProblemTemplateRepository clinicRoomProblemTemplateRepository;
     private final TeamProblemStateRepository teamProblemStateRepository;
     private final TeamInventoryItemRepository teamInventoryItemRepository;
@@ -49,6 +50,7 @@ public class GameSessionQueryService {
             SessionStageSettingRepository sessionStageSettingRepository,
             SessionTeamRepository sessionTeamRepository,
             SessionRuntimeSnapshotService sessionRuntimeSnapshotService,
+            GameSessionRuntimeStateService gameSessionRuntimeStateService,
             ClinicRoomProblemTemplateRepository clinicRoomProblemTemplateRepository,
             TeamProblemStateRepository teamProblemStateRepository,
             TeamInventoryItemRepository teamInventoryItemRepository,
@@ -59,6 +61,7 @@ public class GameSessionQueryService {
         this.sessionStageSettingRepository = sessionStageSettingRepository;
         this.sessionTeamRepository = sessionTeamRepository;
         this.sessionRuntimeSnapshotService = sessionRuntimeSnapshotService;
+        this.gameSessionRuntimeStateService = gameSessionRuntimeStateService;
         this.clinicRoomProblemTemplateRepository = clinicRoomProblemTemplateRepository;
         this.teamProblemStateRepository = teamProblemStateRepository;
         this.teamInventoryItemRepository = teamInventoryItemRepository;
@@ -73,9 +76,10 @@ public class GameSessionQueryService {
                 .toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public GameSessionParticipantsResponse getParticipants(String sessionCode) {
         GameSession session = getSessionOrThrow(sessionCode);
+        gameSessionRuntimeStateService.syncExpiredTimer(session);
 
         List<SessionParticipant> participantsSource = sessionParticipantRepository
                 .findAllByGameSessionIdOrderByJoinedAtAscIdAsc(session.getId());

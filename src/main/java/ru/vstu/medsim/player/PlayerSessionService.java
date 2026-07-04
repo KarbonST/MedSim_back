@@ -25,6 +25,7 @@ import ru.vstu.medsim.player.repository.GameSessionRepository;
 import ru.vstu.medsim.player.repository.PlayerRepository;
 import ru.vstu.medsim.player.repository.SessionParticipantRepository;
 import ru.vstu.medsim.session.GameRoleCatalog;
+import ru.vstu.medsim.session.GameSessionRuntimeStateService;
 import ru.vstu.medsim.session.SessionRuntimeSnapshotService;
 import ru.vstu.medsim.session.domain.SessionStageSetting;
 import ru.vstu.medsim.session.domain.TeamInventoryItem;
@@ -43,6 +44,7 @@ public class PlayerSessionService {
     private final GameSessionRepository gameSessionRepository;
     private final SessionParticipantRepository sessionParticipantRepository;
     private final SessionStageSettingRepository sessionStageSettingRepository;
+    private final GameSessionRuntimeStateService gameSessionRuntimeStateService;
     private final SessionRuntimeSnapshotService sessionRuntimeSnapshotService;
     private final TeamInventoryItemRepository teamInventoryItemRepository;
     private final SessionEconomyService sessionEconomyService;
@@ -53,6 +55,7 @@ public class PlayerSessionService {
             GameSessionRepository gameSessionRepository,
             SessionParticipantRepository sessionParticipantRepository,
             SessionStageSettingRepository sessionStageSettingRepository,
+            GameSessionRuntimeStateService gameSessionRuntimeStateService,
             SessionRuntimeSnapshotService sessionRuntimeSnapshotService,
             TeamInventoryItemRepository teamInventoryItemRepository,
             SessionEconomyService sessionEconomyService,
@@ -62,6 +65,7 @@ public class PlayerSessionService {
         this.gameSessionRepository = gameSessionRepository;
         this.sessionParticipantRepository = sessionParticipantRepository;
         this.sessionStageSettingRepository = sessionStageSettingRepository;
+        this.gameSessionRuntimeStateService = gameSessionRuntimeStateService;
         this.sessionRuntimeSnapshotService = sessionRuntimeSnapshotService;
         this.teamInventoryItemRepository = teamInventoryItemRepository;
         this.sessionEconomyService = sessionEconomyService;
@@ -103,10 +107,10 @@ public class PlayerSessionService {
 
         boolean returningParticipant = participant != null;
 
-        if (!returningParticipant && session.getStatus() != GameSessionStatus.LOBBY) {
+        if (!returningParticipant && session.getStatus() == GameSessionStatus.FINISHED) {
             throw new ResponseStatusException(
                     HttpStatus.CONFLICT,
-                    "Не удалось вернуться в сессию. Проверьте код комнаты, имя и должность: повторный вход после старта доступен только под теми же данными, которые использовались раньше."
+                    "Подключение к завершённой сессии недоступно. Выберите активную игровую комнату."
             );
         }
 
@@ -162,6 +166,10 @@ public class PlayerSessionService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Канбан-доска доступна после старта игры.");
         }
 
+        if (session.getStatus() == GameSessionStatus.PAUSED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Игра поставлена на паузу. Игровые действия временно заблокированы.");
+        }
+
         if (session.getStatus() == GameSessionStatus.FINISHED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Канбан-доска недоступна после завершения игры.");
         }
@@ -191,6 +199,10 @@ public class PlayerSessionService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Канбан-доска доступна после старта игры.");
         }
 
+        if (session.getStatus() == GameSessionStatus.PAUSED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Игра поставлена на паузу. Игровые действия временно заблокированы.");
+        }
+
         if (session.getStatus() == GameSessionStatus.FINISHED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Канбан-доска недоступна после завершения игры.");
         }
@@ -213,6 +225,7 @@ public class PlayerSessionService {
                         HttpStatus.NOT_FOUND,
                         "Сессия с таким кодом не найдена."
                 ));
+        gameSessionRuntimeStateService.syncExpiredTimer(session);
 
         SessionParticipant participant = sessionParticipantRepository.findByIdAndGameSessionId(participantId, session.getId())
                 .orElseThrow(() -> new ResponseStatusException(
@@ -224,8 +237,9 @@ public class PlayerSessionService {
     }
 
     private PlayerTeamWorkspaceResponse buildWorkspace(GameSession session, SessionParticipant participant) {
+        boolean pauseLocked = session.getStatus() == GameSessionStatus.PAUSED;
 
-        List<PlayerTeamWorkspaceMemberResponse> teammates = participant.getTeam() == null
+        List<PlayerTeamWorkspaceMemberResponse> teammates = pauseLocked || participant.getTeam() == null
                 ? List.of()
                 : sessionParticipantRepository.findAllByGameSessionIdAndTeamIdOrderByJoinedAtAscIdAsc(
                                 session.getId(),
@@ -252,7 +266,8 @@ public class PlayerSessionService {
                 ))
                 .toList();
 
-        boolean inventoryVisible = participant.getGameRole() != null
+        boolean inventoryVisible = !pauseLocked
+                && participant.getGameRole() != null
                 && GameRoleCatalog.INVENTORY_ACCESS_ROLES.contains(participant.getGameRole());
 
         List<PlayerTeamInventoryItemResponse> teamInventory = !inventoryVisible || participant.getTeam() == null
@@ -260,7 +275,9 @@ public class PlayerSessionService {
                 : teamInventoryItemRepository.findAllByTeamIdOrderByItemNameAsc(participant.getTeam().getId()).stream()
                 .map(this::toInventoryItem)
                 .toList();
-        TeamKanbanBoardItem teamKanbanBoard = resolveProblemWorkflowBoard(session, participant, stageEntities);
+        TeamKanbanBoardItem teamKanbanBoard = pauseLocked
+                ? null
+                : resolveProblemWorkflowBoard(session, participant, stageEntities);
 
         return new PlayerTeamWorkspaceResponse(
                 participant.getId(),
@@ -279,9 +296,9 @@ public class PlayerSessionService {
                 sessionRuntimeSnapshotService.buildRuntime(session, stageEntities),
                 inventoryVisible,
                 teamInventory,
-                participant.getTeam() != null ? kanbanService.getNotificationsForParticipant(participant) : List.of(),
+                !pauseLocked && participant.getTeam() != null ? kanbanService.getNotificationsForParticipant(participant) : List.of(),
                 teamKanbanBoard,
-                participant.getTeam() != null ? sessionEconomyService.getTeamEconomy(participant.getTeam()) : null
+                !pauseLocked && participant.getTeam() != null ? sessionEconomyService.getTeamEconomy(participant.getTeam()) : null
         );
     }
 
