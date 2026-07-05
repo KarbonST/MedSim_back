@@ -45,6 +45,7 @@ import ru.vstu.medsim.player.domain.SessionParticipant;
 import ru.vstu.medsim.session.GameSessionQueryService;
 import ru.vstu.medsim.session.domain.SessionTeam;
 import ru.vstu.medsim.session.domain.TeamInventoryItem;
+import ru.vstu.medsim.session.dto.GameSessionTeamPenaltyRequest;
 import ru.vstu.medsim.session.dto.SessionEconomySettingsUpdateRequest;
 import ru.vstu.medsim.session.repository.SessionTeamRepository;
 import ru.vstu.medsim.session.repository.TeamInventoryItemRepository;
@@ -602,6 +603,81 @@ public class SessionEconomyService {
         return getEconomyOverview(sessionCode);
     }
 
+    @Transactional
+    public GameSessionEconomyResponse applyTeamPenalty(
+            String sessionCode,
+            Long teamId,
+            GameSessionTeamPenaltyRequest request
+    ) {
+        GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
+
+        if (session.getStatus() == GameSessionStatus.LOBBY) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Штрафы можно применять только после старта игры.");
+        }
+
+        if (session.getStatus() == GameSessionStatus.FINISHED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "После завершения игры штрафы больше не применяются.");
+        }
+
+        SessionTeam team = sessionTeamRepository.findByIdAndGameSessionId(teamId, session.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Команда не найдена."));
+
+        BigDecimal budgetPenalty = request.budgetPenalty().setScale(2, RoundingMode.HALF_UP);
+        int timePenalty = request.timePenalty();
+        String reason = request.reason() != null ? request.reason().trim() : "";
+
+        if (budgetPenalty.compareTo(BigDecimal.ZERO) == 0 && timePenalty == 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Укажите хотя бы один вид штрафа: списание бюджета или времени."
+            );
+        }
+
+        TeamEconomyState state = teamEconomyStateRepository.findByTeamId(team.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Экономика команды не найдена."));
+
+        if (state.getCurrentBalance().compareTo(budgetPenalty) < 0) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Нельзя списать штраф: у команды недостаточно текущего бюджета."
+            );
+        }
+
+        if (state.getCurrentStageTimeUnits() < timePenalty) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Нельзя списать штраф: у команды недостаточно временного ресурса этапа."
+            );
+        }
+
+        state.applyManualPenalty(budgetPenalty, timePenalty);
+        teamEconomyEventRepository.save(new TeamEconomyEvent(
+                team,
+                null,
+                null,
+                TeamEconomyEventType.FACILITATOR_PENALTY,
+                session.getActiveStageNumber(),
+                budgetPenalty.negate(),
+                -timePenalty,
+                null,
+                0,
+                buildManualPenaltyMessage(budgetPenalty, timePenalty, reason)
+        ));
+
+        log.info(
+                "Facilitator penalty applied: sessionCode={}, teamId={}, teamName={}, stageNumber={}, budgetPenalty={}, timePenalty={}, reason={}",
+                session.getCode(),
+                team.getId(),
+                team.getName(),
+                session.getActiveStageNumber(),
+                budgetPenalty,
+                timePenalty,
+                reason
+        );
+
+        return getEconomyOverview(sessionCode);
+    }
+
     @Transactional(readOnly = true)
     public GameSessionEconomyResponse getEconomyOverview(String sessionCode) {
         GameSession session = gameSessionQueryService.getSessionOrThrow(sessionCode);
@@ -1083,6 +1159,25 @@ public class SessionEconomyService {
                         reputationPenalties.add(inspectionPenalties).setScale(2, RoundingMode.HALF_UP),
                         bonus
                 );
+    }
+
+    private String buildManualPenaltyMessage(BigDecimal budgetPenalty, int timePenalty, String reason) {
+        List<String> penaltyParts = new ArrayList<>();
+
+        if (budgetPenalty.compareTo(BigDecimal.ZERO) > 0) {
+            penaltyParts.add("бюджет %.2f".formatted(budgetPenalty));
+        }
+
+        if (timePenalty > 0) {
+            penaltyParts.add("время %d".formatted(timePenalty));
+        }
+
+        String message = "Штраф ведущего: списано %s.".formatted(String.join(" и ", penaltyParts));
+        if (!reason.isBlank()) {
+            return "%s Причина: %s.".formatted(message, reason);
+        }
+
+        return message;
     }
 
     private void validateProblemDistribution(List<Integer> stageProblemCounts) {

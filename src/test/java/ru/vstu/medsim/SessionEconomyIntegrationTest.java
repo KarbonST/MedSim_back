@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -40,6 +41,7 @@ class SessionEconomyIntegrationTest {
 
     @BeforeEach
     void clearDatabase() {
+        jdbcTemplate.update("DELETE FROM team_economy_events");
         jdbcTemplate.update("DELETE FROM team_problem_states");
         jdbcTemplate.update("DELETE FROM team_room_states");
         jdbcTemplate.update("DELETE FROM team_economy_states");
@@ -365,6 +367,70 @@ class SessionEconomyIntegrationTest {
         assertThat(stageTimeUnits).containsExactly(17, 17);
     }
 
+    @Test
+    void shouldApplyFacilitatorPenaltyDuringActiveGame() throws Exception {
+        String sessionCode = createSession("Сессия со штрафами", 2, new BigDecimal("15.00"), 15);
+        Long teamId = firstTeamId(sessionCode);
+
+        jdbcTemplate.update(
+                "UPDATE game_sessions SET status = 'IN_PROGRESS', active_stage_number = 2 WHERE code = ?",
+                sessionCode
+        );
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/economy/teams/{teamId}/penalty", sessionCode, teamId)
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic("facilitator", "medsim123"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "budgetPenalty", new BigDecimal("2.50"),
+                                "timePenalty", 3,
+                                "reason", "Просрочка согласования"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.teams[0].currentBalance").value(12.50))
+                .andExpect(jsonPath("$.teams[0].currentStageTimeUnits").value(12))
+                .andExpect(jsonPath("$.teams[0].totalPenalties").value(2.50))
+                .andExpect(jsonPath("$.teams[0].recentEvents[0].eventType").value("FACILITATOR_PENALTY"))
+                .andExpect(jsonPath("$.teams[0].recentEvents[0].amountDelta").value(-2.50))
+                .andExpect(jsonPath("$.teams[0].recentEvents[0].timeDelta").value(-3))
+                .andExpect(jsonPath("$.teams[0].recentEvents[0].message").value(containsString("Просрочка согласования")));
+
+        BigDecimal currentBalance = jdbcTemplate.queryForObject(
+                "SELECT tes.current_balance FROM team_economy_states tes WHERE tes.team_id = ?",
+                BigDecimal.class,
+                teamId
+        );
+        Integer currentStageTimeUnits = jdbcTemplate.queryForObject(
+                "SELECT tes.current_stage_time_units FROM team_economy_states tes WHERE tes.team_id = ?",
+                Integer.class,
+                teamId
+        );
+        BigDecimal totalPenalties = jdbcTemplate.queryForObject(
+                "SELECT tes.total_penalties FROM team_economy_states tes WHERE tes.team_id = ?",
+                BigDecimal.class,
+                teamId
+        );
+
+        assertThat(currentBalance).isEqualByComparingTo("12.50");
+        assertThat(currentStageTimeUnits).isEqualTo(12);
+        assertThat(totalPenalties).isEqualByComparingTo("2.50");
+    }
+
+    @Test
+    void shouldRejectFacilitatorPenaltyBeforeGameStart() throws Exception {
+        String sessionCode = createSession("Лобби без штрафов", 2, new BigDecimal("15.00"), 15);
+        Long teamId = firstTeamId(sessionCode);
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/economy/teams/{teamId}/penalty", sessionCode, teamId)
+                        .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic("facilitator", "medsim123"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "budgetPenalty", new BigDecimal("1.00"),
+                                "timePenalty", 1,
+                                "reason", "Тест"
+                        ))))
+                .andExpect(status().isConflict());
+    }
+
     private String createSession(String sessionName, int teamCount, BigDecimal startingBudget, int stageTimeUnits) throws Exception {
         String response = mockMvc.perform(post("/api/game-sessions")
                         .with(org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic("facilitator", "medsim123"))
@@ -381,6 +447,21 @@ class SessionEconomyIntegrationTest {
                 .getContentAsString();
 
         return objectMapper.readTree(response).path("sessionCode").asText();
+    }
+
+    private Long firstTeamId(String sessionCode) {
+        return jdbcTemplate.queryForObject(
+                """
+                SELECT st.id
+                FROM session_teams st
+                JOIN game_sessions gs ON gs.id = st.game_session_id
+                WHERE gs.code = ?
+                ORDER BY st.sort_order
+                LIMIT 1
+                """,
+                Long.class,
+                sessionCode
+        );
     }
 
     private void saveThreeStages(String sessionCode) throws Exception {

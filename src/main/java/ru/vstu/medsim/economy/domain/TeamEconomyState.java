@@ -116,6 +116,12 @@ public class TeamEconomyState {
         this.totalBonuses = totalBonuses.add(bonuses);
     }
 
+    public void applyManualPenalty(BigDecimal budgetPenalty, int timePenalty) {
+        this.currentBalance = currentBalance.subtract(budgetPenalty);
+        this.currentStageTimeUnits = currentStageTimeUnits - timePenalty;
+        this.totalPenalties = totalPenalties.add(budgetPenalty);
+    }
+
     public Long getId() {
         return id;
     }

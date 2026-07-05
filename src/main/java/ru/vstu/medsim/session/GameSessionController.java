@@ -30,6 +30,7 @@ import ru.vstu.medsim.session.dto.GameSessionRoleAssignmentRequest;
 import ru.vstu.medsim.session.dto.GameSessionStageSettingsRequest;
 import ru.vstu.medsim.session.dto.GameSessionSummaryResponse;
 import ru.vstu.medsim.session.dto.GameSessionTeamAssignmentRequest;
+import ru.vstu.medsim.session.dto.GameSessionTeamPenaltyRequest;
 import ru.vstu.medsim.session.dto.GameSessionTeamRenameRequest;
 import ru.vstu.medsim.session.dto.SessionEconomySettingsUpdateRequest;
 import ru.vstu.medsim.session.dto.SessionRuntimeStageRequest;
@@ -111,6 +112,15 @@ public class GameSessionController {
             @Valid @RequestBody SessionEconomySettingsUpdateRequest request
     ) {
         return sessionEconomyService.updateEconomySettings(sessionCode, request);
+    }
+
+    @PatchMapping("/{sessionCode}/economy/teams/{teamId}/penalty")
+    public GameSessionEconomyResponse applyTeamPenalty(
+            @PathVariable String sessionCode,
+            @PathVariable Long teamId,
+            @Valid @RequestBody GameSessionTeamPenaltyRequest request
+    ) {
+        return sessionEconomyService.applyTeamPenalty(sessionCode, teamId, request);
     }
 
     @PatchMapping("/{sessionCode}/name")

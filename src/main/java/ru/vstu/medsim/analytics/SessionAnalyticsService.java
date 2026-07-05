@@ -134,7 +134,8 @@ public class SessionAnalyticsService {
                 continue;
             }
 
-            if (event.getEventType() == TeamEconomyEventType.STAGE_SETTLED) {
+            if (event.getEventType() == TeamEconomyEventType.STAGE_SETTLED
+                    || event.getEventType() == TeamEconomyEventType.FACILITATOR_PENALTY) {
                 aggregate.stage(event.getStageNumber()).addNetAmount(event.getAmountDelta());
             }
         }
