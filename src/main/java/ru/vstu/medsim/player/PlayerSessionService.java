@@ -237,9 +237,10 @@ public class PlayerSessionService {
     }
 
     private PlayerTeamWorkspaceResponse buildWorkspace(GameSession session, SessionParticipant participant) {
-        boolean pauseLocked = session.getStatus() == GameSessionStatus.PAUSED;
+        boolean interactionLocked = session.getStatus() == GameSessionStatus.PAUSED
+                || session.getStatus() == GameSessionStatus.FINISHED;
 
-        List<PlayerTeamWorkspaceMemberResponse> teammates = pauseLocked || participant.getTeam() == null
+        List<PlayerTeamWorkspaceMemberResponse> teammates = interactionLocked || participant.getTeam() == null
                 ? List.of()
                 : sessionParticipantRepository.findAllByGameSessionIdAndTeamIdOrderByJoinedAtAscIdAsc(
                                 session.getId(),
@@ -266,7 +267,7 @@ public class PlayerSessionService {
                 ))
                 .toList();
 
-        boolean inventoryVisible = !pauseLocked
+        boolean inventoryVisible = !interactionLocked
                 && participant.getGameRole() != null
                 && GameRoleCatalog.INVENTORY_ACCESS_ROLES.contains(participant.getGameRole());
 
@@ -275,7 +276,7 @@ public class PlayerSessionService {
                 : teamInventoryItemRepository.findAllByTeamIdOrderByItemNameAsc(participant.getTeam().getId()).stream()
                 .map(this::toInventoryItem)
                 .toList();
-        TeamKanbanBoardItem teamKanbanBoard = pauseLocked
+        TeamKanbanBoardItem teamKanbanBoard = interactionLocked
                 ? null
                 : resolveProblemWorkflowBoard(session, participant, stageEntities);
 
@@ -296,9 +297,9 @@ public class PlayerSessionService {
                 sessionRuntimeSnapshotService.buildRuntime(session, stageEntities),
                 inventoryVisible,
                 teamInventory,
-                !pauseLocked && participant.getTeam() != null ? kanbanService.getNotificationsForParticipant(participant) : List.of(),
+                !interactionLocked && participant.getTeam() != null ? kanbanService.getNotificationsForParticipant(participant) : List.of(),
                 teamKanbanBoard,
-                !pauseLocked && participant.getTeam() != null ? sessionEconomyService.getTeamEconomy(participant.getTeam()) : null
+                !interactionLocked && participant.getTeam() != null ? sessionEconomyService.getTeamEconomy(participant.getTeam()) : null
         );
     }
 

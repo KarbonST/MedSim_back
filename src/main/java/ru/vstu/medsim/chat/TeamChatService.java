@@ -132,6 +132,13 @@ public class TeamChatService {
             );
         }
 
+        if (session.getStatus() == GameSessionStatus.FINISHED) {
+            throw new ResponseStatusException(
+                    HttpStatus.CONFLICT,
+                    "Игра завершена. Командный чат больше недоступен."
+            );
+        }
+
         return new PlayerChatAccess(session, participant, participant.getTeam());
     }
 

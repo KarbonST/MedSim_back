@@ -1208,7 +1208,13 @@ class PlayerSessionControllerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sessionStatus").value("FINISHED"))
                 .andExpect(jsonPath("$.sessionRuntime.timerStatus").value("STOPPED"))
-                .andExpect(jsonPath("$.sessionRuntime.remainingSeconds").value(0));
+                .andExpect(jsonPath("$.sessionRuntime.remainingSeconds").value(0))
+                .andExpect(jsonPath("$.teamKanbanBoard").value(nullValue()))
+                .andExpect(jsonPath("$.teamEconomy").value(nullValue()))
+                .andExpect(jsonPath("$.inventoryVisible").value(false))
+                .andExpect(jsonPath("$.teamInventory.length()").value(0))
+                .andExpect(jsonPath("$.kanbanNotifications.length()").value(0))
+                .andExpect(jsonPath("$.teammates.length()").value(0));
 
         assertThat(sessionStatus(sessionCode)).isEqualTo("FINISHED");
         assertThat(timerStatus(sessionCode)).isEqualTo("STOPPED");
@@ -1249,6 +1255,22 @@ class PlayerSessionControllerIntegrationTest {
         mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/chat", sessionCode, annaId))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value(containsString("Командный чат временно заблокирован")));
+    }
+
+    @Test
+    void shouldRejectPlayerChatAfterSessionFinished() throws Exception {
+        String sessionCode = createSession("Завершенный чат", 2);
+        prepareStartedTwoTeamSession(sessionCode);
+        Long annaId = participantIdByName(sessionCode, "Анна Петрова");
+
+        mockMvc.perform(patch("/api/game-sessions/{sessionCode}/finish", sessionCode)
+                        .with(auth()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.sessionStatus").value("FINISHED"));
+
+        mockMvc.perform(get("/api/player-sessions/{sessionCode}/participants/{participantId}/chat", sessionCode, annaId))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(containsString("Командный чат больше недоступен")));
     }
 
     @Test
