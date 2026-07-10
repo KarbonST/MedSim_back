@@ -9,7 +9,7 @@ Backend-часть платформы `MedSim` для учебной ролев�
 `docker compose` запускает `PostgreSQL`, backend и frontend из соседнего репозитория `../MedSim_front`.
 
 ```bash
-cd /Users/Karbon/Desktop/MedSim/MedSim_back
+cd MedSim_back
 cp .env.example .env
 docker compose --env-file .env up --build -d
 ```
@@ -22,14 +22,14 @@ docker compose --env-file .env up --build -d
 Остановка:
 
 ```bash
-cd /Users/Karbon/Desktop/MedSim/MedSim_back
+cd MedSim_back
 docker compose down
 ```
 
 ### Backend локально
 
 ```bash
-cd /Users/test/Desktop/MedSim/MedSim_back
+cd MedSim_back
 cp .env.example .env
 docker compose --env-file .env up -d postgres
 set -a
@@ -43,7 +43,7 @@ mvn spring-boot:run
 ## Проверки
 
 ```bash
-cd /Users/Karbon/Desktop/MedSim/MedSim_back
+cd MedSim_back
 mvn test
 ```
 
@@ -64,6 +64,7 @@ mvn test
 - Ручное и случайное распределение игроков по командам.
 - Ручное и случайное распределение игровых ролей внутри команд.
 - Добавление игроков в уже запущенную сессию.
+- Исключение участника из сессии ведущим.
 - Смена команд и ролей во время игры.
 - Проверка готовности перед стартом: этапы, команды и обязательные роли.
 - Командный чат с историей и `WebSocket`-доставкой новых сообщений.
@@ -77,7 +78,9 @@ mvn test
 - Стартовый склад команды, одинаковый для всех команд в одной сессии.
 - Автоматическая генерация стартового склада и ручная настройка склада ведущим до старта.
 - Автоматическое равномерное распределение задач по этапам и ручная настройка пропорции ведущим.
-- Дашборд для ведущего.
+- Аналитика сессии и экспорт результатов в `Excel`.
+- API для дашбордов ведущего.
+- Перезапуск сессии после завершения или остановки.
 - Система штрафов.
 
 ## Игровая Логика
@@ -118,14 +121,14 @@ mvn test
 
 Канбан-статусы в backend:
 
-- `REGISTERED` — задачи текущего этапа, еще не разобраны главврачом.
-- `ASSIGNED` — задача разобрана главврачом и отправлена на распределение в подразделение.
+- `REGISTERED` — задача находится в общем пуле текущего этапа; сюда же возвращаются карточки после возврата или неуспешного решения.
+- `ASSIGNED` — главврач выставил приоритет и назначил ответственное подразделение.
 - `READY_FOR_WORK` — руководитель подразделения назначил исполнителя.
-- `IN_PROGRESS` — исполнитель взял задачу в работу.
+- `IN_PROGRESS` — исполнитель взял задачу в работу и может выбрать способ решения.
 - `DEPARTMENT_REVIEW` — исполнитель отправил задачу на согласование руководителю подразделения.
 - `CHIEF_DOCTOR_REVIEW` — руководитель подразделения согласовал и отправил задачу главврачу.
-- `REWORK` — задача возвращена после неуспешного согласования.
-- `HOLD` — задача отложена до следующего подходящего этапа.
+- `REWORK` — технический статус, присутствует в enum, но в текущем сценарии напрямую не используется.
+- `HOLD` — задача отложена до следующего этапа и затем автоматически возвращается в пул задач этого этапа.
 - `DONE` — задача закрыта после финального согласования главврачом.
 
 Ключевые правила доступа:
@@ -136,7 +139,9 @@ mvn test
 - Руководители подразделений не могут назначать задачу сами себе.
 - Исполнитель берет задачу в работу, выбирает способ решения, создает резерв ресурсов и отправляет ее на согласование.
 - Сначала задачу согласует руководитель подразделения, затем финально согласует главврач.
-- При возврате задачи резерв ресурсов снимается, а карточка возвращается в пул задач этапа.
+- Главврач и руководитель ответственного подразделения могут вернуть карточку в общий пул текущего этапа.
+- Отложить карточку на следующий этап можно только до начала активной работы и согласования.
+- При возврате, переносе в `HOLD` или неуспешном решении резерв ресурсов снимается.
 
 ### Экономика И Резервы
 
@@ -178,14 +183,17 @@ mvn test
 
 Основные таблицы:
 
-- `users` — системные пользователи.
+- `users` — учетные записи ведущих.
 - `players` — игроки.
 - `game_sessions` — игровые сессии и runtime-состояние.
-- `session_teams` — команды.
 - `session_participants` — участники сессии, команда и игровая роль.
+- `session_teams` — команды.
 - `session_stage_settings` — этапы, длительность, режим и количество задач.
 - `team_chat_messages` — командный чат.
 - `team_inventory_items` — склад команды.
+- `session_economy_settings` — настройки экономики сессии.
+- `team_economy_states` — текущее экономическое состояние команды.
+- `team_economy_events` — события экономики, штрафы и итоги этапов.
 - `clinic_room_templates` — кабинеты поликлиники.
 - `clinic_room_problem_templates` — шаблоны проблем.
 - `team_room_states` — состояние кабинетов команды.
@@ -194,9 +202,6 @@ mvn test
 - `team_kanban_card_events` — история карточек и источник уведомлений.
 - `kanban_solution_options` — варианты решения задач.
 - `team_resource_reservations` — резервы ресурсов.
-- `session_economy_settings` — настройки экономики сессии.
-- `team_economy_states` — текущее экономическое состояние команды.
-- `team_economy_events` — события экономики и итоги этапов.
 
 Миграции лежат в двух местах:
 
@@ -205,7 +210,7 @@ mvn test
 
 ## Основные Endpoints
 
-Публичные:
+Игроки:
 
 - `GET /api/player-sessions/available`
 - `POST /api/player-sessions/join`
@@ -219,11 +224,15 @@ mvn test
 - `GET /api/auth/me`
 - `GET /api/game-sessions`
 - `POST /api/game-sessions`
-- `PATCH /api/game-sessions/{sessionCode}/name`
 - `GET /api/game-sessions/{sessionCode}/participants`
 - `GET /api/game-sessions/{sessionCode}/economy`
 - `GET /api/game-sessions/{sessionCode}/kanban`
+- `GET /api/game-sessions/{sessionCode}/analytics`
+- `GET /api/game-sessions/{sessionCode}/analytics/export`
+- `GET /api/game-sessions/{sessionCode}/team-chats`
 - `PUT /api/game-sessions/{sessionCode}/economy/settings`
+- `PATCH /api/game-sessions/{sessionCode}/economy/teams/{teamId}/penalty`
+- `PATCH /api/game-sessions/{sessionCode}/name`
 - `PATCH /api/game-sessions/{sessionCode}/teams/{teamId}/name`
 - `POST /api/game-sessions/{sessionCode}/teams/auto-assign`
 - `PATCH /api/game-sessions/{sessionCode}/participants/{participantId}/team`
@@ -232,6 +241,7 @@ mvn test
 - `POST /api/game-sessions/{sessionCode}/inventory/randomize`
 - `POST /api/game-sessions/{sessionCode}/roles/random`
 - `PATCH /api/game-sessions/{sessionCode}/participants/{participantId}/role`
+- `DELETE /api/game-sessions/{sessionCode}/participants/{participantId}`
 - `PATCH /api/game-sessions/{sessionCode}/runtime/stage`
 - `PATCH /api/game-sessions/{sessionCode}/runtime/timer/start`
 - `PATCH /api/game-sessions/{sessionCode}/runtime/timer/pause`
@@ -239,11 +249,14 @@ mvn test
 - `PATCH /api/game-sessions/{sessionCode}/start`
 - `PATCH /api/game-sessions/{sessionCode}/pause`
 - `PATCH /api/game-sessions/{sessionCode}/finish`
+- `PATCH /api/game-sessions/{sessionCode}/restart`
 - `DELETE /api/game-sessions/{sessionCode}`
 
 `WebSocket`:
 
 - `/ws/team-chat` — realtime-сообщения командного чата.
+- игрок подключается с `sessionCode` и `participantId` в query-параметрах.
+- ведущий подключается с `sessionCode` и `credentials` (`Base64(login:password)`).
 
 ## Технологии
 
